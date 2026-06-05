@@ -1,0 +1,108 @@
+# Agent Repair Eval
+
+Objective process-level evaluation framework for LLM coding-agent repair trajectories.
+
+This repository implements the code side of the research framework:
+
+- repeated code generation / repair loop;
+- feedback-test vs hidden-test split;
+- objective execution-state classification;
+- standardized feedback messages;
+- JSONL episode logging;
+- process-level metrics;
+- HAMSM-style transition dataset and logistic transition models.
+
+The evaluator and the analysis model are intentionally separate:
+
+- `runner.py` produces auditable trajectory data;
+- `analysis.py`, `metrics.py`, and `hamsm.py` analyze saved logs afterward.
+
+## 1. Setup in VS Code
+
+```bash
+# Create project folder however you prefer, then inside the folder:
+python -m venv .venv
+
+# Windows PowerShell:
+.venv\Scripts\Activate.ps1
+
+# macOS/Linux:
+source .venv/bin/activate
+
+python -m pip install --upgrade pip
+pip install -e ".[dev]"
+```
+
+Open the folder in VS Code:
+
+```bash
+code .
+```
+
+In VS Code, choose the `.venv` interpreter.
+
+## 2. Run the demo
+
+```bash
+python scripts/run_demo.py
+python -m agent_repair_eval.analysis --episodes outputs/episodes.jsonl --out reports
+```
+
+Expected output files:
+
+```text
+outputs/episodes.jsonl
+reports/attempts_flat.csv
+reports/state_frequencies.csv
+reports/transition_table.csv
+reports/transition_matrix.csv
+reports/recovery_by_state.csv
+reports/dwell_time_summary.csv
+reports/regression_summary.csv
+reports/hidden_generalization.csv
+reports/hamsm_transition_dataset.csv
+reports/models/hamsm_transition_model.joblib
+```
+
+## 3. Run a small EvalPlus sample
+
+Set your API key first if using the OpenAI adapter:
+
+```bash
+# Windows PowerShell:
+setx OPENAI_API_KEY "your_api_key_here"
+setx OPENAI_MODEL "gpt-4o-mini"
+
+# macOS/Linux:
+export OPENAI_API_KEY="your_api_key_here"
+export OPENAI_MODEL="gpt-4o-mini"
+```
+
+Then run:
+
+```bash
+python scripts/run_evalplus_sample.py
+python -m agent_repair_eval.analysis --episodes outputs/evalplus_sample_episodes.jsonl --out reports_evalplus_sample
+```
+
+Start with a tiny sample first. Full HumanEval+/MBPP+ runs cost money and time.
+
+## 4. GitHub workflow
+
+```bash
+git init
+git add .
+git commit -m "Initial agent repair evaluation framework"
+```
+
+Create an empty GitHub repository in your browser. Then run the commands GitHub gives you, usually:
+
+```bash
+git branch -M main
+git remote add origin https://github.com/YOUR_USERNAME/YOUR_REPO_NAME.git
+git push -u origin main
+```
+
+## 5. Important safety note
+
+The included sandbox is a research starter sandbox. It uses a child process, timeout, memory limit where supported, import restrictions, and static security scans. For a paper-quality experiment on untrusted LLM code, run this inside a stronger isolation layer such as Docker, a locked-down VM, or a dedicated disposable machine.

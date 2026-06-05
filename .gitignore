@@ -1,0 +1,28 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.env
+outputs/
+reports/
+models/
+*.joblib
+.DS_Store
+.vscode/
+
+# Python environment
+.venv/
+venv/
+__pycache__/
+*.pyc
+
+# Generated outputs
+outputs/
+reports/
+reports_openai_demo/
+reports_ollama_demo/
+
+# Secrets
+.env
+*.key

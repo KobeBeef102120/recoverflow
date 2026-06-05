@@ -1,0 +1,10 @@
+{
+  "max_attempts": 5,
+  "timeout_seconds": 2.0,
+  "memory_limit_mb": 512,
+  "feedback_ratio": 0.2,
+  "split_seed": 42,
+  "max_stderr_chars": 1200,
+  "max_stdout_chars": 1200,
+  "feedback_policy": "structured"
+}
