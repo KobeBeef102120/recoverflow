@@ -101,6 +101,7 @@ def execute_on_tests(
             passed=int(raw.get("passed", 0)),
             total=int(raw.get("total", len(tests))),
             runtime_ms=int(raw.get("runtime_ms", 0)),
+            memory_mb=raw.get("memory_mb"),
             stdout_excerpt=raw.get("stdout_excerpt"),
             stderr_excerpt=raw.get("stderr_excerpt"),
             exception_type=raw.get("exception_type"),

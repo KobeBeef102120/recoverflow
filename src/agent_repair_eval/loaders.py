@@ -30,7 +30,7 @@ def split_tests(
     tests: list[TestCase],
     feedback_ratio: float,
     seed: int,
-    min_feedback_tests: int = 1,
+    min_feedback_tests: int = 3,
 ) -> tuple[list[TestCase], list[TestCase]]:
     if not 0 < feedback_ratio < 1:
         raise ValueError("feedback_ratio must be between 0 and 1")

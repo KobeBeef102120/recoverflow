@@ -17,7 +17,12 @@ def choose_feedback_type(result: ExecutionResult, policy: str = "structured") ->
     return FeedbackType.STRUCTURED_FEEDBACK
 
 
-def build_standardized_feedback(result: ExecutionResult, policy: str = "structured") -> str:
+def build_standardized_feedback(
+    result: ExecutionResult,
+    policy: str = "structured",
+    timeout_seconds: float | None = None,
+    memory_limit_mb: int | None = None,
+) -> str:
     """Build objective feedback only from execution evidence."""
     feedback_type = choose_feedback_type(result, policy)
     header = (
@@ -104,19 +109,23 @@ def build_standardized_feedback(result: ExecutionResult, policy: str = "structur
         )
 
     if state == State.TIMEOUT:
+        time_info = f"{timeout_seconds} seconds" if timeout_seconds is not None else "the configured time limit"
         return (
             f"{header}\n\n"
             "Your previous solution exceeded the allowed execution time.\n"
             f"Error category: {state.value}\n"
+            f"Time limit: {time_info}\n"
             f"Terminal message:\n{result.message}\n"
             "Please revise the solution so that it completes within the time limit."
         )
 
     if state == State.MEMORY_ERROR:
+        mem_info = f"{memory_limit_mb} MB" if memory_limit_mb is not None else "the configured memory limit"
         return (
             f"{header}\n\n"
             "Your previous solution exceeded the allowed memory limit or raised a memory-related error.\n"
             f"Error category: {state.value}\n"
+            f"Memory limit: {mem_info}\n"
             f"Terminal message:\n{result.stderr_excerpt or result.message}\n"
             "Please revise the solution so that it stays within the memory limit."
         )

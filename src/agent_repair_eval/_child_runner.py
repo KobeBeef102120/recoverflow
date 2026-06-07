@@ -10,6 +10,25 @@ import traceback
 from pathlib import Path
 from typing import Any
 
+def _peak_memory_mb() -> float | None:
+    """Return peak RSS in MB. Works on Linux/macOS via resource; falls back to psutil."""
+    try:
+        import resource
+        usage = resource.getrusage(resource.RUSAGE_SELF)
+        # Linux: ru_maxrss in KB; macOS: ru_maxrss in bytes
+        if sys.platform == "darwin":
+            return usage.ru_maxrss / (1024.0 * 1024.0)
+        return usage.ru_maxrss / 1024.0
+    except Exception:
+        pass
+    try:
+        import os
+        import psutil  # type: ignore[import]
+        return psutil.Process(os.getpid()).memory_info().rss / (1024.0 * 1024.0)
+    except Exception:
+        return None
+
+
 ALLOWED_IMPORT_ROOTS = {
     "math",
     "itertools",
@@ -155,6 +174,12 @@ def _limit_memory(memory_limit_mb: int | None) -> None:
 
 
 def run_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    result = _run_payload(payload)
+    result["memory_mb"] = _peak_memory_mb()
+    return result
+
+
+def _run_payload(payload: dict[str, Any]) -> dict[str, Any]:
     code = payload["code"]
     entry_point = payload["entry_point"]
     tests = payload["tests"]
@@ -253,7 +278,7 @@ def run_payload(payload: dict[str, Any]) -> dict[str, Any]:
             result["runtime_ms"] = int((time.perf_counter() - started) * 1000)
             return result
 
-        if type(actual) is not type(expected) and actual != expected:
+        if type(actual) is not type(expected):
             result.update(
                 {
                     "state": "OUTPUT_FORMAT_ERROR",

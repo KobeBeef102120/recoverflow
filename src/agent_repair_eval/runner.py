@@ -34,7 +34,7 @@ def run_problem_episode(
         problem.tests,
         feedback_ratio=feedback_ratio,
         seed=stable_split_seed(problem.problem_id, split_seed),
-        min_feedback_tests=1,
+        min_feedback_tests=3,
     )
     episode_id = f"{problem.problem_id}_{llm.model_id}_seed{episode_seed}"
     prompt = build_initial_prompt(problem.prompt)
@@ -43,7 +43,6 @@ def run_problem_episode(
     final_code = ""
     counts: Counter[str] = Counter()
     previous_state: State | None = None
-    previous_pass_rate = 0.0
 
     for attempt in range(1, max_attempts + 1):
         response = llm.generate(prompt, problem_id=problem.problem_id, attempt=attempt)
@@ -62,7 +61,12 @@ def run_problem_episode(
         counts[state.value] += 1
         dwell_time = _compute_dwell_time(trajectory, state)
         ordered_history = [* [log.state.value for log in trajectory], state.value]
-        feedback_type = FeedbackType.NONE if state == State.FEEDBACK_PASS else choose_feedback_type(result, feedback_policy)
+        feedback_type = (
+            FeedbackType.NONE
+            if state in (State.FEEDBACK_PASS, State.SECURITY_VIOLATION)
+            else choose_feedback_type(result, feedback_policy)
+        )
+        delta_pass_rate = _compute_delta_pass_rate(trajectory, result.pass_rate)
 
         log = _build_attempt_log(
             episode_id=episode_id,
@@ -77,6 +81,7 @@ def run_problem_episode(
             ordered_history=ordered_history,
             counts=counts,
             code_hash=sha256_text(candidate_code),
+            delta_pass_rate=delta_pass_rate,
         )
         trajectory.append(log)
 
@@ -84,11 +89,21 @@ def run_problem_episode(
             break
 
         previous_state = state
-        previous_pass_rate = result.pass_rate
 
         if attempt < max_attempts:
-            feedback = build_standardized_feedback(result, policy=feedback_policy)
-            prompt = build_repair_prompt(problem.prompt, candidate_code, feedback)
+            feedback = build_standardized_feedback(
+                result,
+                policy=feedback_policy,
+                timeout_seconds=sandbox_config.timeout_seconds,
+                memory_limit_mb=sandbox_config.memory_limit_mb,
+            )
+            prompt = build_repair_prompt(
+                problem.prompt,
+                candidate_code,
+                feedback,
+                stderr=result.stderr_excerpt,
+                stdout=result.stdout_excerpt,
+            )
 
     if trajectory[-1].state != State.FEEDBACK_PASS and trajectory[-1].state != State.SECURITY_VIOLATION:
         counts[State.TERMINAL_UNRESOLVED.value] += 1
@@ -105,7 +120,7 @@ def run_problem_episode(
                 episode_id=episode_id,
                 problem_id=problem.problem_id,
                 model_id=llm.model_id,
-                attempt=max_attempts + 1,
+                attempt=max_attempts,
                 max_attempts=max_attempts,
                 result=terminal_result,
                 feedback_type=FeedbackType.NONE,
@@ -114,6 +129,7 @@ def run_problem_episode(
                 ordered_history=terminal_history,
                 counts=counts,
                 code_hash=sha256_text(final_code),
+                delta_pass_rate=0.0,
             )
         )
 
@@ -123,7 +139,12 @@ def run_problem_episode(
         tests=hidden_tests,
         config=sandbox_config,
     )
-    final_outcome = FinalOutcome.FINAL_PASS if hidden_result.state == State.FEEDBACK_PASS else FinalOutcome.FINAL_FAIL
+    if hidden_result.state == State.FEEDBACK_PASS:
+        final_outcome = FinalOutcome.FINAL_PASS
+    elif hidden_result.state in (State.ASSERTION_FAILURE, State.OUTPUT_FORMAT_ERROR):
+        final_outcome = FinalOutcome.FINAL_FAIL
+    else:
+        final_outcome = FinalOutcome.FINAL_ERROR
 
     return EpisodeLog(
         episode_id=episode_id,
@@ -160,6 +181,12 @@ def _compute_dwell_time(trajectory: list[AttemptLog], state: State) -> int:
     return trajectory[-1].dwell_time_current_state + 1
 
 
+def _compute_delta_pass_rate(trajectory: list[AttemptLog], current_pass_rate: float) -> float:
+    if not trajectory:
+        return 0.0
+    return current_pass_rate - trajectory[-1].feedback_pass_rate
+
+
 def _build_attempt_log(
     *,
     episode_id: str,
@@ -174,6 +201,7 @@ def _build_attempt_log(
     ordered_history: list[str],
     counts: Counter[str],
     code_hash: str,
+    delta_pass_rate: float,
 ) -> AttemptLog:
     return AttemptLog(
         episode_id=episode_id,
@@ -188,8 +216,9 @@ def _build_attempt_log(
         feedback_tests_passed=result.passed,
         feedback_tests_total=result.total,
         feedback_pass_rate=result.pass_rate,
+        delta_feedback_pass_rate=delta_pass_rate,
         runtime_ms=result.runtime_ms,
-        memory_mb=None,
+        memory_mb=result.memory_mb,
         feedback_type=feedback_type,
         previous_state=previous_state,
         dwell_time_current_state=dwell_time,

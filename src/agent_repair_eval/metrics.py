@@ -5,7 +5,52 @@ from typing import Any
 
 import pandas as pd
 
-from agent_repair_eval.states import RUNNABLE_FAILURE_STATES, NON_RUNNABLE_STATES, State
+from agent_repair_eval.states import NON_RUNNABLE_STATES, RUNNABLE_FAILURE_STATES, State
+
+
+def pass_at_k_summary(episodes: list[dict[str, Any]]) -> pd.DataFrame:
+    """Sequential pass-at-k table (Section 9.1 baseline metric).
+
+    For each k, reports the fraction of episodes where the model passed all
+    feedback tests within the first k attempts, and the overall hidden-test
+    success rate (which is fixed — it reflects the final code after the full
+    attempt budget, not a per-k value).
+
+    Note: this is sequential repair pass@k, not the independent-sampling
+    estimator used in the original HumanEval Pass@k paper.
+    """
+    if not episodes:
+        return pd.DataFrame()
+
+    n = len(episodes)
+    max_k = max((len(ep["trajectory"]) for ep in episodes), default=0)
+    rows = []
+    for k in range(1, max_k + 1):
+        feedback_pass = sum(
+            1 for ep in episodes
+            if any(
+                log["state"] == State.FEEDBACK_PASS.value
+                for log in ep["trajectory"][:k]
+            )
+        ) / n
+        rows.append({"k": k, "feedback_pass_at_k": round(feedback_pass, 4)})
+
+    hidden_pass = sum(
+        1 for ep in episodes if ep["final_outcome"] == "FINAL_PASS"
+    ) / n
+    df = pd.DataFrame(rows)
+    df["hidden_pass_rate"] = round(hidden_pass, 4)
+    return df
+
+
+def feedback_loop_success_rate(episodes: list[dict[str, Any]]) -> float:
+    """Fraction of episodes where the model passes all feedback tests within K attempts."""
+    if not episodes:
+        return 0.0
+    return sum(
+        1 for ep in episodes
+        if any(log["state"] == State.FEEDBACK_PASS.value for log in ep["trajectory"])
+    ) / len(episodes)
 
 
 def flatten_attempts(episodes: list[dict[str, Any]]) -> pd.DataFrame:

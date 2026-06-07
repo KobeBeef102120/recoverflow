@@ -10,6 +10,7 @@ src/agent_repair_eval/jsonl.py
 src/agent_repair_eval/llm.py
 src/agent_repair_eval/loaders.py
 src/agent_repair_eval/metrics.py
+src/agent_repair_eval/plots.py
 src/agent_repair_eval/prompts.py
 src/agent_repair_eval/runner.py
 src/agent_repair_eval/sandbox.py

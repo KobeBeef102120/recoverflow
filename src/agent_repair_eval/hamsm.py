@@ -20,6 +20,16 @@ class HAMSMArtifacts:
     label_column: str
 
 
+# Columns that are metadata and must never be used as model features.
+_META_COLS: frozenset[str] = frozenset({
+    "next_state",
+    "episode_id",
+    "problem_id",
+    "model_id",
+    "final_outcome",
+})
+
+
 def build_transition_dataset(episodes: list[dict[str, Any]], history_length: int = 3) -> pd.DataFrame:
     """Create one row per observed transition X_t -> X_{t+1}.
 
@@ -59,14 +69,31 @@ def build_transition_dataset(episodes: list[dict[str, Any]], history_length: int
     return pd.DataFrame(rows).fillna(0)
 
 
-def fit_transition_model(transitions: pd.DataFrame) -> Pipeline:
-    """Fit multinomial logistic regression for Pr(X_{t+1}=j | Z_t)."""
-    if transitions.empty:
-        raise ValueError("No transitions available. Need at least one episode with two states.")
+def _feature_columns(transitions: pd.DataFrame, feature_set: str) -> list[str]:
+    """Return the column names to use as features for a given model variant."""
+    all_cols = [c for c in transitions.columns if c not in _META_COLS]
+    history_cols = [c for c in all_cols if c.startswith("history_")]
+    count_cols = [c for c in all_cols if c.startswith("count_")]
+
+    if feature_set == "first_order":
+        return ["current_state"]
+    if feature_set == "higher_order":
+        return ["current_state"] + history_cols
+    if feature_set == "count_augmented":
+        return ["current_state"] + count_cols
+    if feature_set == "duration_dependent":
+        return ["current_state", "dwell_time_current_state"]
+    # "full" — all non-metadata features (HAMSM)
+    return all_cols
+
+
+def _fit_pipeline(transitions: pd.DataFrame, feature_set: str) -> Pipeline:
+    """Fit a multinomial logistic transition model for the given feature set."""
     y = transitions["next_state"]
-    x = transitions.drop(columns=["next_state", "episode_id"], errors="ignore")
-    categorical = [c for c in x.columns if x[c].dtype == "object"]
-    numeric = [c for c in x.columns if c not in categorical]
+    cols = _feature_columns(transitions, feature_set)
+    x = transitions[cols]
+    categorical = [c for c in cols if x[c].dtype == "object"]
+    numeric = [c for c in cols if c not in categorical]
 
     preprocessor = ColumnTransformer(
         transformers=[
@@ -74,14 +101,87 @@ def fit_transition_model(transitions: pd.DataFrame) -> Pipeline:
             ("num", StandardScaler(), numeric),
         ]
     )
-    model = LogisticRegression(
-        max_iter=2000,
-        multi_class="auto",
-        class_weight="balanced",
-    )
-    pipe = Pipeline([("preprocess", preprocessor), ("model", model)])
+    pipe = Pipeline([
+        ("preprocess", preprocessor),
+        ("model", LogisticRegression(max_iter=2000, class_weight="balanced")),
+    ])
     pipe.fit(x, y)
     return pipe
+
+
+def fit_transition_model(transitions: pd.DataFrame) -> Pipeline:
+    """Fit the full HAMSM multinomial transition model: Pr(X_{t+1} | Z_t)."""
+    if transitions.empty:
+        raise ValueError("No transitions available. Need at least one episode with two states.")
+    return _fit_pipeline(transitions, "full")
+
+
+def fit_first_order_model(transitions: pd.DataFrame) -> Pipeline:
+    """Baseline: Pr(X_{t+1} | X_t) — first-order Markov."""
+    return _fit_pipeline(transitions, "first_order")
+
+
+def fit_higher_order_model(transitions: pd.DataFrame) -> Pipeline:
+    """Baseline: Pr(X_{t+1} | X_t, X_{t-1}, ...) — higher-order Markov."""
+    return _fit_pipeline(transitions, "higher_order")
+
+
+def fit_count_augmented_model(transitions: pd.DataFrame) -> Pipeline:
+    """Baseline: Pr(X_{t+1} | X_t, C_t) — count-augmented Markov."""
+    return _fit_pipeline(transitions, "count_augmented")
+
+
+def fit_duration_dependent_model(transitions: pd.DataFrame) -> Pipeline:
+    """Baseline: Pr(X_{t+1} | X_t, D_t) — duration-dependent Markov."""
+    return _fit_pipeline(transitions, "duration_dependent")
+
+
+def compare_baseline_models(transitions: pd.DataFrame) -> pd.DataFrame:
+    """Fit all HAMSM baselines and return a training-accuracy comparison table.
+
+    Corresponds to Section 9 of the RecoverFlow paper (baseline suite for RQ3).
+
+    Note: accuracy is computed on the same data used for fitting. For the final
+    paper, use cross-validation (sklearn cross_val_score) on a larger dataset to
+    get unbiased estimates.
+    """
+    if transitions.empty or transitions["next_state"].nunique() < 2:
+        return pd.DataFrame()
+
+    y = transitions["next_state"]
+    configs = [
+        ("First-Order Markov",       "first_order"),
+        ("Higher-Order Markov",      "higher_order"),
+        ("Count-Augmented Markov",   "count_augmented"),
+        ("Duration-Dependent Markov","duration_dependent"),
+        ("HAMSM (Full)",             "full"),
+    ]
+
+    rows = []
+    for name, feature_set in configs:
+        try:
+            pipe = _fit_pipeline(transitions, feature_set)
+            cols = _feature_columns(transitions, feature_set)
+            preds = pipe.predict(transitions[cols])
+            accuracy = float((preds == y).mean())
+            rows.append({
+                "model": name,
+                "feature_set": feature_set,
+                "train_accuracy": round(accuracy, 4),
+                "n_transitions": len(transitions),
+                "n_classes": int(y.nunique()),
+            })
+        except Exception as exc:
+            rows.append({
+                "model": name,
+                "feature_set": feature_set,
+                "train_accuracy": float("nan"),
+                "n_transitions": len(transitions),
+                "n_classes": int(y.nunique()),
+                "error": str(exc),
+            })
+
+    return pd.DataFrame(rows)
 
 
 def fit_direct_recovery_model(transitions: pd.DataFrame) -> Pipeline | None:
@@ -91,9 +191,11 @@ def fit_direct_recovery_model(transitions: pd.DataFrame) -> Pipeline | None:
     y = (transitions["next_state"] == "FEEDBACK_PASS").astype(int)
     if y.nunique() < 2:
         return None
-    x = transitions.drop(columns=["next_state", "episode_id"], errors="ignore")
-    categorical = [c for c in x.columns if x[c].dtype == "object"]
-    numeric = [c for c in x.columns if c not in categorical]
+
+    cols = _feature_columns(transitions, "full")
+    x = transitions[cols]
+    categorical = [c for c in cols if x[c].dtype == "object"]
+    numeric = [c for c in cols if c not in categorical]
 
     preprocessor = ColumnTransformer(
         transformers=[
@@ -101,8 +203,10 @@ def fit_direct_recovery_model(transitions: pd.DataFrame) -> Pipeline | None:
             ("num", StandardScaler(), numeric),
         ]
     )
-    model = LogisticRegression(max_iter=2000, class_weight="balanced")
-    pipe = Pipeline([("preprocess", preprocessor), ("model", model)])
+    pipe = Pipeline([
+        ("preprocess", preprocessor),
+        ("model", LogisticRegression(max_iter=2000, class_weight="balanced")),
+    ])
     pipe.fit(x, y)
     return pipe
 
@@ -118,12 +222,24 @@ def save_models(
     *,
     transition_model: Pipeline,
     direct_recovery_model: Pipeline | None,
+    first_order_model: Pipeline | None = None,
+    higher_order_model: Pipeline | None = None,
+    count_augmented_model: Pipeline | None = None,
+    duration_dependent_model: Pipeline | None = None,
 ) -> None:
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     joblib.dump(transition_model, out / "hamsm_transition_model.joblib")
     if direct_recovery_model is not None:
         joblib.dump(direct_recovery_model, out / "direct_recovery_model.joblib")
+    if first_order_model is not None:
+        joblib.dump(first_order_model, out / "first_order_markov_model.joblib")
+    if higher_order_model is not None:
+        joblib.dump(higher_order_model, out / "higher_order_markov_model.joblib")
+    if count_augmented_model is not None:
+        joblib.dump(count_augmented_model, out / "count_augmented_model.joblib")
+    if duration_dependent_model is not None:
+        joblib.dump(duration_dependent_model, out / "duration_dependent_model.joblib")
 
 
 def _delta_pass_rate(logs: list[dict[str, Any]], idx: int) -> float:

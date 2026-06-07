@@ -1,0 +1,6 @@
+episode_id,problem_id,model_id,transitions,test_pass_regressions,runnability_regressions,test_pass_regression_rate,runnability_regression_rate
+HumanEval/0_Qwen/Qwen2.5-Coder-7B-Instruct_seed0,HumanEval/0,Qwen/Qwen2.5-Coder-7B-Instruct,0,0,0,0.0,0.0
+HumanEval/1_Qwen/Qwen2.5-Coder-7B-Instruct_seed0,HumanEval/1,Qwen/Qwen2.5-Coder-7B-Instruct,0,0,0,0.0,0.0
+HumanEval/2_Qwen/Qwen2.5-Coder-7B-Instruct_seed0,HumanEval/2,Qwen/Qwen2.5-Coder-7B-Instruct,0,0,0,0.0,0.0
+HumanEval/3_Qwen/Qwen2.5-Coder-7B-Instruct_seed0,HumanEval/3,Qwen/Qwen2.5-Coder-7B-Instruct,0,0,0,0.0,0.0
+HumanEval/4_Qwen/Qwen2.5-Coder-7B-Instruct_seed0,HumanEval/4,Qwen/Qwen2.5-Coder-7B-Instruct,0,0,0,0.0,0.0

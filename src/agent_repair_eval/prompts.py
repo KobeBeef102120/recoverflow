@@ -2,19 +2,40 @@ from __future__ import annotations
 
 
 def build_initial_prompt(problem_prompt: str) -> str:
+    """Return the user message for the first coding attempt."""
     return (
-        "You are solving a Python programming benchmark problem.\n"
-        "Return only a complete Python implementation. Do not include explanations.\n\n"
-        f"Problem:\n{problem_prompt}\n"
+        "Implement the following Python function.\n"
+        "Return your answer as a complete Python code block inside ```python ... ``` markers.\n"
+        "Include only the function definition and any helper code — no prose or commentary.\n\n"
+        f"{problem_prompt.strip()}"
     )
 
 
-def build_repair_prompt(original_problem: str, previous_code: str, feedback: str) -> str:
-    return (
-        "You are revising a previous Python solution using objective execution feedback.\n"
-        "Return only a complete corrected Python implementation. Do not include explanations.\n\n"
-        f"Original problem:\n{original_problem}\n\n"
-        "Previous incorrect code:\n"
-        f"```python\n{previous_code}\n```\n\n"
-        f"Objective execution feedback:\n{feedback}\n"
-    )
+def build_repair_prompt(
+    problem_prompt: str,
+    previous_code: str,
+    feedback: str,
+    stderr: str | None = None,
+    stdout: str | None = None,
+) -> str:
+    """Return the user message for a repair attempt given execution feedback."""
+    parts = [
+        "Your previous solution was incorrect. "
+        "Study the execution feedback below and return a corrected implementation.\n"
+        "Return your answer as a complete Python code block inside ```python ... ``` markers.\n"
+        "Include only the function definition and any helper code — no prose, no apologies.\n\n"
+        "Original problem:\n"
+        f"{problem_prompt.strip()}\n\n"
+        "Your previous attempt:\n"
+        "```python\n"
+        f"{previous_code.strip()}\n"
+        "```\n\n"
+        f"{feedback.strip()}",
+    ]
+
+    if stderr and stderr.strip():
+        parts.append(f"\nError output:\n{stderr.strip()}")
+    if stdout and stdout.strip():
+        parts.append(f"\nProgram output:\n{stdout.strip()}")
+
+    return "\n".join(parts)

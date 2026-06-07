@@ -44,6 +44,7 @@ class ExecutionResult:
     passed: int
     total: int
     runtime_ms: int
+    memory_mb: float | None = None
     stdout_excerpt: str | None = None
     stderr_excerpt: str | None = None
     exception_type: str | None = None
@@ -76,8 +77,9 @@ class AttemptLog:
     feedback_tests_passed: int
     feedback_tests_total: int
     feedback_pass_rate: float
+    delta_feedback_pass_rate: float
     runtime_ms: int
-    memory_mb: int | None
+    memory_mb: float | None
     feedback_type: FeedbackType
     previous_state: State | None
     dwell_time_current_state: int
