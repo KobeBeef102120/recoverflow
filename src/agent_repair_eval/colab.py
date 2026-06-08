@@ -89,8 +89,9 @@ def run_eval(
     from agent_repair_eval.metrics import (
         dwell_time_summary, edit_distance_summary, feedback_loop_success_rate,
         flatten_attempts, hidden_generalization, pass_at_k_summary,
-        recovery_by_attempt, recovery_by_state, regression_summary,
-        state_frequencies, transition_matrix, transition_table,
+        recovery_by_attempt, recovery_by_state, recovery_source_states,
+        regression_summary, state_frequencies, transition_matrix,
+        transition_table,
     )
     from agent_repair_eval.hamsm import build_transition_dataset
 
@@ -185,6 +186,7 @@ def run_eval(
     hidden_df      = hidden_generalization(episodes)
     pass_at_k_df   = pass_at_k_summary(episodes)
     recovery_attempt_df = recovery_by_attempt(episodes)
+    recovery_source_df  = recovery_source_states(episodes)
     hamsm_df       = build_transition_dataset(episodes, history_length=3)
     edit_dist_df   = edit_distance_summary(attempts_df)
     fb_success     = feedback_loop_success_rate(episodes)
@@ -202,6 +204,7 @@ def run_eval(
         "hidden":      hidden_df,
         "pass_at_k":   pass_at_k_df,
         "recovery_by_attempt": recovery_attempt_df,
+        "recovery_source_states": recovery_source_df,
         "hamsm_data":  hamsm_df,
         "edit_distance": edit_dist_df,
         "fb_success":  fb_success,
@@ -239,6 +242,7 @@ def display_results(results: dict[str, Any], *, model_id: str = "") -> None:
     _show_table(results["edit_distance"], "Edit Distance Between Attempts")
     _show_table(results["pass_at_k"],     "Pass@k")
     _show_table(results.get("recovery_by_attempt"), "Recovery by Attempt (when does recovery happen?)")
+    _show_table(results.get("recovery_source_states"), "Recovery Source States (which error was fixed?)")
     _show_table(results["hidden"],        "Hidden-Test Generalization")
 
     _plot_state_frequencies(results["state_freq"])
@@ -250,6 +254,7 @@ def display_results(results: dict[str, Any], *, model_id: str = "") -> None:
     _plot_hidden_generalization(results["hidden"])
     _plot_pass_at_k(results["pass_at_k"])
     _plot_recovery_by_attempt(results.get("recovery_by_attempt"))
+    _plot_recovery_source_states(results.get("recovery_source_states"))
 
 
 # ---------------------------------------------------------------------------
@@ -524,5 +529,25 @@ def _plot_recovery_by_attempt(df: pd.DataFrame) -> None:
     ax.set_xticks(attempts)
     ax.set_ylim(0, 1.05)
     ax.legend()
+    fig.tight_layout()
+    plt.show()
+
+
+def _plot_recovery_source_states(df: pd.DataFrame) -> None:
+    if df is None or df.empty:
+        return
+    from IPython.display import display, HTML
+    display(HTML(_section("Which Error States Get Fixed?")))
+
+    fig, ax = plt.subplots(figsize=(9, 4.5))
+    bars = ax.barh(df["source_state"], df["pct_of_recoveries"], color="#3498db")
+    ax.invert_yaxis()  # most common at top
+    for b, c in zip(bars, df["recoveries"]):
+        ax.text(b.get_width() + 0.01, b.get_y() + b.get_height() / 2,
+                f"n={int(c)}", va="center", fontsize=9)
+    ax.set_xlabel("Share of all recoveries")
+    ax.set_ylabel("Error state immediately before the fix")
+    ax.set_title("Which error the model was in right before it recovered")
+    ax.set_xlim(0, 1.05)
     fig.tight_layout()
     plt.show()

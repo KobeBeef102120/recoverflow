@@ -98,6 +98,46 @@ def recovery_by_attempt(episodes: list[dict[str, Any]]) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def recovery_source_states(episodes: list[dict[str, Any]]) -> pd.DataFrame:
+    """Which error state was the model in right before it recovered?
+
+    For every recovery (an episode that first reached FEEDBACK_PASS at attempt
+    >= 2), looks at the state on the immediately preceding attempt — the error
+    the model successfully fixed in one step. Reports the distribution of those
+    pre-recovery error states.
+
+    Columns:
+        source_state       – the error state immediately before FEEDBACK_PASS
+        recoveries         – number of recoveries that came from this state
+        pct_of_recoveries  – share of all recoveries that came from this state
+    """
+    if not episodes:
+        return pd.DataFrame()
+
+    source_counts: Counter[str] = Counter()
+    for ep in episodes:
+        traj = ep["trajectory"]
+        for i, log in enumerate(traj):
+            if log["state"] == State.FEEDBACK_PASS.value:
+                if i >= 1:  # recovered (something preceded the pass)
+                    source_counts[traj[i - 1]["state"]] += 1
+                break
+
+    total = sum(source_counts.values())
+    if total == 0:
+        return pd.DataFrame()
+
+    rows = [
+        {
+            "source_state": state,
+            "recoveries": count,
+            "pct_of_recoveries": round(count / total, 4),
+        }
+        for state, count in source_counts.most_common()
+    ]
+    return pd.DataFrame(rows)
+
+
 def feedback_loop_success_rate(episodes: list[dict[str, Any]]) -> float:
     """Fraction of episodes where the model passes all feedback tests within K attempts."""
     if not episodes:
