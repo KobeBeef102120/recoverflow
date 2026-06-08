@@ -20,12 +20,14 @@ import pandas as pd
 # ---------------------------------------------------------------------------
 
 def run_eval(
-    model_id: str = "Qwen/Qwen2.5-Coder-0.5B-Instruct",
+    model_id: str | None = None,
     *,
     n_problems: int = 20,
     max_attempts: int = 5,
     feedback_policy: str = "structured",
-    dataset: str = "humaneval",
+    dataset: str | None = None,
+    dataset_split: str = "test",
+    column_map: dict[str, str] | None = None,
     timeout_seconds: float = 5.0,
     memory_limit_mb: int = 512,
     split_seed: int = 42,
@@ -79,7 +81,7 @@ def run_eval(
     _check_colab_deps()
 
     from agent_repair_eval.llm import LocalHuggingFaceClient, validate_model
-    from agent_repair_eval.loaders import load_evalplus_benchmark
+    from agent_repair_eval.loaders import load_evalplus_benchmark, load_huggingface_dataset
     from agent_repair_eval.runner import run_problem_episode
     from agent_repair_eval.schemas import SandboxConfig, to_jsonable
     from agent_repair_eval.metrics import (
@@ -90,14 +92,47 @@ def run_eval(
     )
     from agent_repair_eval.hamsm import build_transition_dataset
 
+    # ── Interactive prompts for missing arguments ────────────────────────────
+    if model_id is None:
+        model_id = input(
+            "Enter a HuggingFace model ID to evaluate\n"
+            "  (e.g. Qwen/Qwen2.5-Coder-0.5B-Instruct): "
+        ).strip()
+
+    if dataset is None:
+        print("\nDataset options:")
+        print("  [1] humaneval  — HumanEval+ (built-in, recommended)")
+        print("  [2] mbpp       — MBPP+ (built-in)")
+        print("  [3] custom     — any HuggingFace dataset ID")
+        choice = input("Choose [1/2/3] or type a HF dataset ID directly: ").strip()
+        if choice in ("1", "humaneval", ""):
+            dataset = "humaneval"
+        elif choice in ("2", "mbpp"):
+            dataset = "mbpp"
+        elif choice == "3":
+            dataset = input("Enter HuggingFace dataset ID (e.g. openai/openai_humaneval): ").strip()
+        else:
+            dataset = choice  # user typed a dataset ID directly
+
     _print_header(model_id, dataset, n_problems, max_attempts)
 
+    # ── Load problems ────────────────────────────────────────────────────────
+    _BUILTIN = {"humaneval", "humaneval+", "human_eval", "mbpp", "mbpp+"}
     print("Loading benchmark problems...")
-    problems = load_evalplus_benchmark(
-        dataset,
-        max_problems=n_problems,
-        max_tests_per_problem=max_tests_per_problem,
-    )
+    if dataset.lower() in _BUILTIN:
+        problems = load_evalplus_benchmark(
+            dataset,
+            max_problems=n_problems,
+            max_tests_per_problem=max_tests_per_problem,
+        )
+    else:
+        problems = load_huggingface_dataset(
+            dataset,
+            split=dataset_split,
+            max_problems=n_problems,
+            max_tests_per_problem=max_tests_per_problem,
+            column_map=column_map,
+        )
     print(f"  Loaded {len(problems)} problems.\n")
 
     validate_model(model_id)

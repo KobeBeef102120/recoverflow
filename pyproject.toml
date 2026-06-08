@@ -34,6 +34,7 @@ colab = [
   "torch>=2.0.0",
   "accelerate>=0.27.0",
   "evalplus>=0.2.0",
+  "datasets>=2.18.0",
   "ipython>=7.0.0",
 ]
 
