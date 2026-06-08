@@ -208,6 +208,7 @@ class LocalHuggingFaceClient:
     temperature: float = 0.7
     max_new_tokens: int = 1200
     _pipeline: object = None
+    _announced: bool = False
 
     def _get_pipeline(self):
         if self._pipeline is not None:
@@ -253,15 +254,23 @@ class LocalHuggingFaceClient:
         # every retry deterministic and identical.
         from transformers import GenerationConfig
 
-        do_sample = self.temperature and self.temperature > 0
+        do_sample = bool(self.temperature and self.temperature > 0)
         gen_config = GenerationConfig(
             max_new_tokens=self.max_new_tokens,
-            do_sample=bool(do_sample),
+            do_sample=do_sample,
             temperature=self.temperature if do_sample else None,
             top_p=0.95 if do_sample else None,
             pad_token_id=tokenizer.pad_token_id or tokenizer.eos_token_id,
             eos_token_id=tokenizer.eos_token_id,
         )
+
+        # One-time confirmation so it's visible whether the sampling code path
+        # (this method) is the one actually running. If you don't see this line,
+        # an older cached module is loaded — restart the runtime.
+        if not self._announced:
+            mode = f"sampling (temperature={self.temperature}, top_p=0.95)" if do_sample else "greedy"
+            print(f"  [RecoverFlow] Generation mode: {mode}")
+            self._announced = True
 
         import torch
 
