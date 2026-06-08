@@ -91,21 +91,8 @@ def _fit_pipeline(transitions: pd.DataFrame, feature_set: str) -> Pipeline:
     """Fit a multinomial logistic transition model for the given feature set."""
     y = transitions["next_state"]
     cols = _feature_columns(transitions, feature_set)
-    x = transitions[cols]
-    categorical = [c for c in cols if x[c].dtype == "object"]
-    numeric = [c for c in cols if c not in categorical]
-
-    preprocessor = ColumnTransformer(
-        transformers=[
-            ("cat", OneHotEncoder(handle_unknown="ignore"), categorical),
-            ("num", StandardScaler(), numeric),
-        ]
-    )
-    pipe = Pipeline([
-        ("preprocess", preprocessor),
-        ("model", LogisticRegression(max_iter=2000, class_weight="balanced")),
-    ])
-    pipe.fit(x, y)
+    pipe = _make_pipeline_for(transitions, feature_set)
+    pipe.fit(transitions[cols], y)
     return pipe
 
 
@@ -182,6 +169,153 @@ def compare_baseline_models(transitions: pd.DataFrame) -> pd.DataFrame:
             })
 
     return pd.DataFrame(rows)
+
+
+def cross_validate_models(
+    transitions: pd.DataFrame,
+    *,
+    n_splits: int = 5,
+    scoring: str = "accuracy",
+    random_state: int = 0,
+) -> pd.DataFrame:
+    """Out-of-sample comparison of the HAMSM against its baselines.
+
+    Uses GroupKFold keyed on episode_id so that all transitions from one
+    episode stay in the same fold — this prevents leakage from correlated
+    within-trajectory transitions, which is the flaw in training accuracy.
+
+    Returns one row per model with the cross-validated mean ± std of the score,
+    plus the per-fold scores (so a paired significance test can be run against
+    the first-order baseline — see markov_assumption_test).
+
+    scoring: any sklearn classifier metric name. "accuracy" or
+    "neg_log_loss" (proper scoring rule) are the useful ones here.
+    """
+    from sklearn.model_selection import GroupKFold, cross_val_score
+
+    if transitions.empty or transitions["next_state"].nunique() < 2:
+        return pd.DataFrame()
+
+    # Need enough episodes to form the folds.
+    groups = transitions["episode_id"]
+    n_groups = groups.nunique()
+    if n_groups < n_splits:
+        n_splits = max(2, n_groups)
+        if n_groups < 2:
+            return pd.DataFrame()  # cannot cross-validate a single episode
+
+    y = transitions["next_state"]
+    configs = [
+        ("First-Order Markov",        "first_order"),
+        ("Higher-Order Markov",       "higher_order"),
+        ("Count-Augmented Markov",    "count_augmented"),
+        ("Duration-Dependent Markov", "duration_dependent"),
+        ("HAMSM (Full)",              "full"),
+    ]
+
+    rows = []
+    for name, feature_set in configs:
+        try:
+            cols = _feature_columns(transitions, feature_set)
+            x = transitions[cols]
+            pipe = _make_pipeline_for(transitions, feature_set)
+            scores = cross_val_score(
+                pipe, x, y,
+                groups=groups,
+                cv=GroupKFold(n_splits=n_splits),
+                scoring=scoring,
+            )
+            import statistics
+            rows.append({
+                "model": name,
+                "feature_set": feature_set,
+                "cv_mean": round(float(scores.mean()), 4),
+                "cv_std": round(float(scores.std(ddof=1)) if len(scores) > 1 else 0.0, 4),
+                "n_splits": n_splits,
+                "n_episodes": int(n_groups),
+                "n_transitions": len(transitions),
+                "mean_pm_std": f"{scores.mean():.3f} ± {scores.std(ddof=1) if len(scores) > 1 else 0.0:.3f}",
+                "_fold_scores": list(map(float, scores)),
+            })
+        except Exception as exc:
+            rows.append({
+                "model": name, "feature_set": feature_set,
+                "cv_mean": float("nan"), "cv_std": float("nan"),
+                "n_splits": n_splits, "n_episodes": int(n_groups),
+                "n_transitions": len(transitions), "mean_pm_std": "n/a",
+                "_fold_scores": [], "error": str(exc),
+            })
+
+    return pd.DataFrame(rows)
+
+
+def markov_assumption_test(
+    transitions: pd.DataFrame,
+    *,
+    n_splits: int = 5,
+    scoring: str = "accuracy",
+) -> dict[str, Any]:
+    """Test whether history adds predictive power over a first-order Markov model.
+
+    This is the empirical justification for the "History-Augmented" premise: it
+    compares the full HAMSM against the first-order baseline on the SAME
+    cross-validation folds (paired) and runs a Wilcoxon signed-rank test on the
+    per-fold score differences.
+
+    Returns a dict with the two models' CV means, the mean paired difference,
+    and the Wilcoxon p-value. A small p-value (and positive difference) is
+    evidence that history genuinely helps — i.e. the HAMSM is justified.
+    """
+    cv = cross_validate_models(transitions, n_splits=n_splits, scoring=scoring)
+    if cv.empty:
+        return {"error": "Not enough data to cross-validate."}
+
+    def _folds(model_name: str) -> list[float]:
+        row = cv[cv["model"] == model_name]
+        return list(row.iloc[0]["_fold_scores"]) if not row.empty else []
+
+    first = _folds("First-Order Markov")
+    hamsm = _folds("HAMSM (Full)")
+    if len(first) != len(hamsm) or len(first) < 2:
+        return {"error": "Insufficient paired folds for a significance test."}
+
+    diffs = [h - f for h, f in zip(hamsm, first)]
+    mean_diff = sum(diffs) / len(diffs)
+
+    p_value = None
+    try:
+        from scipy.stats import wilcoxon
+        if any(d != 0 for d in diffs):
+            p_value = float(wilcoxon(hamsm, first).pvalue)
+    except Exception:
+        p_value = None
+
+    return {
+        "first_order_cv_mean": round(sum(first) / len(first), 4),
+        "hamsm_cv_mean": round(sum(hamsm) / len(hamsm), 4),
+        "mean_fold_difference": round(mean_diff, 4),
+        "wilcoxon_p_value": round(p_value, 4) if p_value is not None else None,
+        "n_folds": len(diffs),
+        "history_helps": bool(p_value is not None and p_value < 0.05 and mean_diff > 0),
+    }
+
+
+def _make_pipeline_for(transitions: pd.DataFrame, feature_set: str) -> Pipeline:
+    """Build an unfitted pipeline for a feature set (for cross-validation)."""
+    cols = _feature_columns(transitions, feature_set)
+    x = transitions[cols]
+    categorical = [c for c in cols if x[c].dtype == "object"]
+    numeric = [c for c in cols if c not in categorical]
+    preprocessor = ColumnTransformer(
+        transformers=[
+            ("cat", OneHotEncoder(handle_unknown="ignore"), categorical),
+            ("num", StandardScaler(), numeric),
+        ]
+    )
+    return Pipeline([
+        ("preprocess", preprocessor),
+        ("model", LogisticRegression(max_iter=2000, class_weight="balanced")),
+    ])
 
 
 def fit_direct_recovery_model(transitions: pd.DataFrame) -> Pipeline | None:

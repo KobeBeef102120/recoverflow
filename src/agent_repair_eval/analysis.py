@@ -6,12 +6,14 @@ from pathlib import Path
 from agent_repair_eval.hamsm import (
     build_transition_dataset,
     compare_baseline_models,
+    cross_validate_models,
     fit_count_augmented_model,
     fit_direct_recovery_model,
     fit_duration_dependent_model,
     fit_first_order_model,
     fit_higher_order_model,
     fit_transition_model,
+    markov_assumption_test,
     save_models,
 )
 from agent_repair_eval.jsonl import read_jsonl
@@ -98,9 +100,23 @@ def analyze_episodes(episodes_path: str | Path, out_dir: str | Path) -> None:
 
         baseline_df = compare_baseline_models(transitions)
         baseline_df.to_csv(out / "baseline_model_comparison.csv", index=False)
-        print("\nBaseline model comparison (training accuracy):")
+        print("\nBaseline model comparison (TRAINING accuracy — in-sample, optimistic):")
         print(baseline_df.to_string(index=False))
-        print("  Note: use cross-validation on a larger dataset for paper results.\n")
+
+        # Out-of-sample, leakage-free comparison (this is the paper number).
+        cv_df = cross_validate_models(transitions, n_splits=5)
+        if not cv_df.empty:
+            cv_show = cv_df.drop(columns=[c for c in ["_fold_scores"] if c in cv_df.columns])
+            cv_df.drop(columns=["_fold_scores"], errors="ignore").to_csv(
+                out / "model_comparison_crossval.csv", index=False)
+            print("\nModel comparison (CROSS-VALIDATED, GroupKFold by episode — report this):")
+            print(cv_show.to_string(index=False))
+
+            markov = markov_assumption_test(transitions, n_splits=5)
+            print("\nMarkov-assumption test (does history beat first-order?):")
+            for k, v in markov.items():
+                print(f"  {k}: {v}")
+        print()
 
         save_models(
             out / "models",

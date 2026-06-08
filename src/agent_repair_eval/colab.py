@@ -250,9 +250,12 @@ def _build_results(episodes: list[dict[str, Any]]) -> dict[str, Any]:
         recovery_by_attempt, recovery_by_state, recovery_source_states,
         regression_summary, state_frequencies, transition_matrix, transition_table,
     )
-    from agent_repair_eval.hamsm import build_transition_dataset
+    from agent_repair_eval.hamsm import (
+        build_transition_dataset, cross_validate_models, markov_assumption_test,
+    )
 
     attempts_df = flatten_attempts(episodes)
+    transitions = build_transition_dataset(episodes, history_length=3)
     return {
         "episodes":    episodes,
         "attempts":    attempts_df,
@@ -266,7 +269,9 @@ def _build_results(episodes: list[dict[str, Any]]) -> dict[str, Any]:
         "pass_at_k":   pass_at_k_summary(episodes),
         "recovery_by_attempt": recovery_by_attempt(episodes),
         "recovery_source_states": recovery_source_states(episodes),
-        "hamsm_data":  build_transition_dataset(episodes, history_length=3),
+        "hamsm_data":  transitions,
+        "hamsm_cv":    cross_validate_models(transitions, n_splits=5),
+        "markov_test": markov_assumption_test(transitions, n_splits=5),
         "edit_distance": edit_distance_summary(attempts_df),
         "fb_success":  feedback_loop_success_rate(episodes),
         "hidden_pass": sum(1 for ep in episodes if ep["final_outcome"] == "FINAL_PASS") / len(episodes),
@@ -327,6 +332,7 @@ def display_results(results: dict[str, Any], *, model_id: str = "") -> None:
     _show_table(results.get("recovery_by_attempt"), "Recovery by Attempt (when does recovery happen?)")
     _show_table(results.get("recovery_source_states"), "Recovery Source States (which error was fixed?)")
     _show_table(results["hidden"],        "Hidden-Test Generalization")
+    _show_hamsm_validation(results.get("hamsm_cv"), results.get("markov_test"))
 
     _plot_state_frequencies(results["state_freq"])
     _plot_recovery_rates(results["recovery"])
@@ -343,6 +349,41 @@ def display_results(results: dict[str, Any], *, model_id: str = "") -> None:
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
+
+def _show_hamsm_validation(cv_df, markov_test) -> None:
+    """Display the out-of-sample HAMSM comparison and the Markov-assumption test."""
+    from IPython.display import display, HTML
+
+    if cv_df is not None and not getattr(cv_df, "empty", True):
+        shown = cv_df.drop(columns=[c for c in ["_fold_scores"] if c in cv_df.columns])
+        _show_table(shown, "HAMSM Out-of-Sample Validation (GroupKFold CV by episode)")
+
+    if isinstance(markov_test, dict) and "error" not in markov_test:
+        p = markov_test.get("wilcoxon_p_value")
+        helps = markov_test.get("history_helps")
+        verdict = ("History significantly improves prediction (p &lt; 0.05) — the "
+                   "'History-Augmented' premise is supported."
+                   if helps else
+                   "History does not yet show a significant improvement at this "
+                   "sample size — collect more episodes for adequate power.")
+        color = "#2ecc71" if helps else "#e67e22"
+        display(HTML(_section("Markov Assumption Test (does history help?)")))
+        display(HTML(
+            f"<table style='font-size:14px;border-collapse:collapse'>"
+            f"<tr><td style='padding:5px 14px'><b>First-order CV mean</b></td>"
+            f"<td>{markov_test.get('first_order_cv_mean')}</td></tr>"
+            f"<tr><td style='padding:5px 14px'><b>HAMSM CV mean</b></td>"
+            f"<td>{markov_test.get('hamsm_cv_mean')}</td></tr>"
+            f"<tr><td style='padding:5px 14px'><b>Mean paired difference</b></td>"
+            f"<td>{markov_test.get('mean_fold_difference')}</td></tr>"
+            f"<tr><td style='padding:5px 14px'><b>Wilcoxon p-value</b></td>"
+            f"<td>{p}</td></tr>"
+            f"<tr><td style='padding:5px 14px'><b>Folds</b></td>"
+            f"<td>{markov_test.get('n_folds')}</td></tr>"
+            f"</table>"
+            f"<p style='color:{color};font-size:13px;margin-top:6px'>{verdict}</p>"
+        ))
+
 
 def _check_colab_deps() -> None:
     missing = []
