@@ -98,6 +98,139 @@ def recovery_by_attempt(episodes: list[dict[str, Any]]) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def _per_problem_metric(episodes: list[dict[str, Any]], metric: str) -> dict[str, float]:
+    """Map problem_id -> scalar metric for one run, for paired comparison."""
+    out: dict[str, float] = {}
+    for ep in episodes:
+        pid = ep["problem_id"]
+        if metric == "final_pass":
+            out[pid] = 1.0 if ep["final_outcome"] == "FINAL_PASS" else 0.0
+        elif metric == "feedback_success":
+            states = [log["state"] for log in ep["trajectory"]]
+            out[pid] = 1.0 if State.FEEDBACK_PASS.value in states else 0.0
+        elif metric == "hidden_pass_rate":
+            out[pid] = float(ep.get("final_hidden_pass_rate", 0.0))
+        elif metric == "recovered":
+            # 1 if the model recovered (first pass at attempt >= 2), else 0;
+            # problems solved on attempt 1 or never solved are 0.
+            first_pass = next(
+                (log["attempt"] for log in ep["trajectory"]
+                 if log["state"] == State.FEEDBACK_PASS.value), None
+            )
+            out[pid] = 1.0 if (first_pass is not None and first_pass >= 2) else 0.0
+        else:
+            raise ValueError(f"Unknown metric {metric!r}")
+    return out
+
+
+def _paired_bootstrap(diffs: list[float], n_boot: int, seed: int) -> tuple[float, float, float]:
+    """Return (ci_low, ci_high, two_sided_p) for the mean of paired differences."""
+    import random as _random
+
+    rng = _random.Random(seed)
+    n = len(diffs)
+    means = []
+    for _ in range(n_boot):
+        resample = [diffs[rng.randrange(n)] for _ in range(n)]
+        means.append(sum(resample) / n)
+    means.sort()
+    lo = means[int(0.025 * n_boot)]
+    hi = means[int(0.975 * n_boot) - 1]
+    # Two-sided bootstrap p-value: how often the resampled mean is on the
+    # opposite side of zero from the observed mean (doubled).
+    frac_le0 = sum(1 for m in means if m <= 0) / n_boot
+    frac_ge0 = sum(1 for m in means if m >= 0) / n_boot
+    p = min(1.0, 2.0 * min(frac_le0, frac_ge0))
+    return lo, hi, p
+
+
+def compare_two_runs(
+    episodes_a: list[dict[str, Any]],
+    episodes_b: list[dict[str, Any]],
+    *,
+    metric: str = "final_pass",
+    label_a: str = "A",
+    label_b: str = "B",
+    n_boot: int = 10000,
+    seed: int = 0,
+) -> dict[str, Any]:
+    """Paired significance test comparing two runs on the same problems.
+
+    Pairs episodes by problem_id (both runs must cover the same problems) and
+    reports: the two means, their difference, a paired-bootstrap 95% CI and
+    p-value on the difference, a Wilcoxon signed-rank p-value, and — for binary
+    metrics — McNemar's exact p-value.
+
+    metric: "final_pass" | "feedback_success" | "recovered" | "hidden_pass_rate".
+    The first three are binary (McNemar applies); the last is continuous.
+
+    Produces the defensible sentence a reviewer wants, e.g.:
+        "A passes 5.0% more than B (95% CI [1.2%, 8.8%], paired bootstrap p=0.01)."
+    """
+    a_map = _per_problem_metric(episodes_a, metric)
+    b_map = _per_problem_metric(episodes_b, metric)
+    common = sorted(set(a_map) & set(b_map))
+    if len(common) < 2:
+        return {"error": "Need at least 2 shared problems to compare."}
+
+    a = [a_map[p] for p in common]
+    b = [b_map[p] for p in common]
+    diffs = [ai - bi for ai, bi in zip(a, b)]
+    mean_a = sum(a) / len(a)
+    mean_b = sum(b) / len(b)
+    mean_diff = mean_a - mean_b
+
+    ci_low, ci_high, boot_p = _paired_bootstrap(diffs, n_boot=n_boot, seed=seed)
+
+    wilcoxon_p = None
+    try:
+        from scipy.stats import wilcoxon
+        if any(d != 0 for d in diffs):
+            wilcoxon_p = float(wilcoxon(a, b).pvalue)
+    except Exception:
+        wilcoxon_p = None
+
+    mcnemar_p = None
+    is_binary = metric in {"final_pass", "feedback_success", "recovered"}
+    if is_binary:
+        # Discordant pairs: b_count = A solved & B not; c_count = B solved & A not.
+        b_count = sum(1 for ai, bi in zip(a, b) if ai == 1 and bi == 0)
+        c_count = sum(1 for ai, bi in zip(a, b) if ai == 0 and bi == 1)
+        try:
+            from scipy.stats import binomtest
+            n_disc = b_count + c_count
+            if n_disc > 0:
+                mcnemar_p = float(binomtest(min(b_count, c_count), n_disc, 0.5).pvalue)
+        except Exception:
+            mcnemar_p = None
+
+    significant = ci_low > 0 or ci_high < 0  # CI excludes zero
+
+    return {
+        "metric": metric,
+        "label_a": label_a,
+        "label_b": label_b,
+        "n_paired_problems": len(common),
+        "mean_a": round(mean_a, 4),
+        "mean_b": round(mean_b, 4),
+        "mean_difference": round(mean_diff, 4),
+        "bootstrap_ci_low": round(ci_low, 4),
+        "bootstrap_ci_high": round(ci_high, 4),
+        "bootstrap_p_value": round(boot_p, 4),
+        "wilcoxon_p_value": round(wilcoxon_p, 4) if wilcoxon_p is not None else None,
+        "mcnemar_p_value": round(mcnemar_p, 4) if mcnemar_p is not None else None,
+        "significant_at_95": bool(significant),
+        "summary": (
+            f"{label_a} {'>' if mean_diff >= 0 else '<'} {label_b} on '{metric}': "
+            f"{mean_a:.3f} vs {mean_b:.3f}, diff {mean_diff:+.3f} "
+            f"(95% CI [{ci_low:+.3f}, {ci_high:+.3f}], paired bootstrap p={boot_p:.3f}"
+            + (f", Wilcoxon p={wilcoxon_p:.3f}" if wilcoxon_p is not None else "")
+            + (f", McNemar p={mcnemar_p:.3f}" if mcnemar_p is not None else "")
+            + ")"
+        ),
+    }
+
+
 def summarize_seed_runs(per_seed: list[dict[str, float]]) -> pd.DataFrame:
     """Aggregate per-seed scalar metrics into mean ± sample-σ across seeds.
 

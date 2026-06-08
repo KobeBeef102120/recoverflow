@@ -296,6 +296,60 @@ def _seed_everything(seed: int) -> None:
         pass
 
 
+def compare_runs(
+    results_a: dict[str, Any],
+    results_b: dict[str, Any],
+    *,
+    label_a: str = "A",
+    label_b: str = "B",
+    metrics: list[str] | None = None,
+    n_boot: int = 10000,
+) -> "pd.DataFrame":
+    """Paired significance comparison between two run_eval results.
+
+    Pairs problems shared by both runs and, for each metric, reports the means,
+    their difference, a paired-bootstrap 95% CI and p-value, a Wilcoxon p-value,
+    and (for binary metrics) McNemar's p-value. Displays a table inline and
+    returns it.
+
+    Example:
+        a = run_eval("Qwen/Qwen2.5-Coder-1.5B-Instruct", dataset="humaneval")
+        b = run_eval("Qwen/Qwen2.5-Coder-7B-Instruct",  dataset="humaneval")
+        compare_runs(a, b, label_a="1.5B", label_b="7B")
+    """
+    from agent_repair_eval.metrics import compare_two_runs
+
+    if metrics is None:
+        metrics = ["final_pass", "feedback_success", "recovered", "hidden_pass_rate"]
+
+    rows = []
+    for m in metrics:
+        res = compare_two_runs(
+            results_a["episodes"], results_b["episodes"],
+            metric=m, label_a=label_a, label_b=label_b, n_boot=n_boot,
+        )
+        if "error" in res:
+            continue
+        rows.append({
+            "metric": m,
+            f"{label_a}_mean": res["mean_a"],
+            f"{label_b}_mean": res["mean_b"],
+            "difference": res["mean_difference"],
+            "ci_95": f"[{res['bootstrap_ci_low']:+.3f}, {res['bootstrap_ci_high']:+.3f}]",
+            "bootstrap_p": res["bootstrap_p_value"],
+            "wilcoxon_p": res["wilcoxon_p_value"],
+            "mcnemar_p": res["mcnemar_p_value"],
+            "significant": "yes" if res["significant_at_95"] else "no",
+        })
+
+    df = pd.DataFrame(rows)
+    try:
+        _show_table(df, f"Paired Significance Comparison: {label_a} vs {label_b}")
+    except Exception:
+        pass
+    return df
+
+
 def display_results(results: dict[str, Any], *, model_id: str = "") -> None:
     """Re-display all tables and charts from a results dict returned by run_eval."""
     _check_display()

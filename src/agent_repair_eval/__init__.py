@@ -10,4 +10,4 @@ Quick start (Colab / Jupyter):
 
 __version__ = "0.1.0"
 
-from agent_repair_eval.colab import run_eval, display_results  # noqa: F401
+from agent_repair_eval.colab import run_eval, display_results, compare_runs  # noqa: F401
