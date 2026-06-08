@@ -93,11 +93,14 @@ def transition_table(episodes: list[dict[str, Any]]) -> pd.DataFrame:
 
 
 def transition_matrix(episodes: list[dict[str, Any]]) -> pd.DataFrame:
+    from agent_repair_eval.states import STATE_PRIORITY
     table = transition_table(episodes)
     if table.empty:
         return pd.DataFrame()
     matrix = table.pivot(index="source_state", columns="destination_state", values="probability")
-    return matrix.fillna(0.0).sort_index(axis=0).sort_index(axis=1)
+    all_states = [s.value for s in STATE_PRIORITY]
+    matrix = matrix.reindex(index=all_states, columns=all_states, fill_value=0.0)
+    return matrix
 
 
 def recovery_by_state(episodes: list[dict[str, Any]]) -> pd.DataFrame:

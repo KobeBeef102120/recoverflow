@@ -203,6 +203,7 @@ def display_results(results: dict[str, Any], *, model_id: str = "") -> None:
     _plot_recovery_rates(results["recovery"])
     _plot_dwell_time(results["dwell"])
     _plot_edit_distance(results["edit_distance"])
+    _show_transition_table(results["transition_matrix"])
     _plot_transition_matrix(results["transition_matrix"])
     _plot_hidden_generalization(results["hidden"])
     _plot_pass_at_k(results["pass_at_k"])
@@ -323,25 +324,62 @@ def _plot_dwell_time(df: pd.DataFrame) -> None:
     plt.show()
 
 
+def _show_transition_table(df: pd.DataFrame) -> None:
+    if df is None or df.empty:
+        return
+    from IPython.display import display, HTML
+    display(HTML(_section("State Transition Probabilities (%)")))
+
+    pct = (df * 100).round(1)
+    pct.insert(0, "From \\ To", pct.index)
+
+    header_cells = "".join(f"<th>{c}</th>" for c in pct.columns)
+    rows_html = ""
+    for _, row in pct.iterrows():
+        cells = f"<td><b>{row.iloc[0]}</b></td>"
+        for val in row.iloc[1:]:
+            if val >= 50:
+                bg = "#1a6fad"; fg = "white"
+            elif val >= 20:
+                bg = "#aed6f1"; fg = "black"
+            elif val > 0:
+                bg = "#eaf4fb"; fg = "black"
+            else:
+                bg = "white"; fg = "#ccc"
+            cells += f"<td style='background:{bg};color:{fg};text-align:center'>{val if val > 0 else '—'}</td>"
+        rows_html += f"<tr>{cells}</tr>"
+
+    display(HTML(f"""
+    <style>
+      .rf-trans {{ border-collapse: collapse; font-size: 12px; width: 100%; }}
+      .rf-trans th {{ background-color: #4A90D9; color: white; padding: 6px 8px; text-align: center; }}
+      .rf-trans td {{ padding: 5px 8px; border: 1px solid #eee; }}
+    </style>
+    <table class="rf-trans"><thead><tr>{header_cells}</tr></thead><tbody>{rows_html}</tbody></table>
+    <p style="font-size:11px;color:#888">Values are % of transitions from that row state. Darker blue = more likely.</p>
+    """))
+
+
 def _plot_transition_matrix(df: pd.DataFrame) -> None:
     if df is None or df.empty:
         return
     from IPython.display import display, HTML
     display(HTML(_section("State Transition Heatmap")))
-    fig, ax = plt.subplots(figsize=(11, 8))
-    im = ax.imshow(df.values, aspect="auto", cmap="Blues")
-    ax.set_xticks(range(len(df.columns)))
-    ax.set_xticklabels(df.columns, rotation=45, ha="right", fontsize=8)
-    ax.set_yticks(range(len(df.index)))
-    ax.set_yticklabels(df.index, fontsize=8)
+    n = len(df)
+    fig, ax = plt.subplots(figsize=(max(14, n * 0.85), max(10, n * 0.7)))
+    im = ax.imshow(df.values, aspect="auto", cmap="Blues", vmin=0, vmax=1)
+    ax.set_xticks(range(n))
+    ax.set_xticklabels(df.columns, rotation=55, ha="right", fontsize=7)
+    ax.set_yticks(range(n))
+    ax.set_yticklabels(df.index, fontsize=7)
     ax.set_xlabel("Next State")
     ax.set_ylabel("Current State")
-    ax.set_title("Empirical transition probabilities between execution states")
-    for i in range(df.shape[0]):
-        for j in range(df.shape[1]):
+    ax.set_title("Empirical transition probabilities (all states)")
+    for i in range(n):
+        for j in range(n):
             v = df.iloc[i, j]
-            if v > 0.01:
-                ax.text(j, i, f"{v:.2f}", ha="center", va="center", fontsize=7,
+            if v > 0.005:
+                ax.text(j, i, f"{v:.2f}", ha="center", va="center", fontsize=6,
                         color="white" if v > 0.5 else "black")
     fig.colorbar(im, ax=ax, label="Probability")
     fig.tight_layout()
