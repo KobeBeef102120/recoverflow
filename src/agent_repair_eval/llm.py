@@ -230,18 +230,47 @@ class LocalHuggingFaceClient:
 
     def generate(self, prompt: str, *, problem_id: str, attempt: int) -> str:
         pipe = self._get_pipeline()
+        model = pipe.model
+        tokenizer = pipe.tokenizer
+
         messages = [
             {"role": "system", "content": _SYSTEM_PROMPT},
             {"role": "user", "content": prompt},
         ]
-        output = pipe(
+
+        # Build inputs via the chat template so the model sees correctly
+        # formatted role markers.
+        input_ids = tokenizer.apply_chat_template(
             messages,
+            add_generation_prompt=True,
+            return_tensors="pt",
+        ).to(model.device)
+
+        # Drive model.generate directly with an explicit GenerationConfig so the
+        # sampling settings are actually honored. Passing temperature/do_sample as
+        # loose kwargs to the pipeline is silently ignored in transformers 5.x in
+        # favor of the model's built-in (greedy) generation_config — which made
+        # every retry deterministic and identical.
+        from transformers import GenerationConfig
+
+        do_sample = self.temperature and self.temperature > 0
+        gen_config = GenerationConfig(
             max_new_tokens=self.max_new_tokens,
-            temperature=self.temperature,
-            do_sample=self.temperature > 0,
-            pad_token_id=pipe.tokenizer.eos_token_id,
+            do_sample=bool(do_sample),
+            temperature=self.temperature if do_sample else None,
+            top_p=0.95 if do_sample else None,
+            pad_token_id=tokenizer.pad_token_id or tokenizer.eos_token_id,
+            eos_token_id=tokenizer.eos_token_id,
         )
-        return output[0]["generated_text"][-1]["content"]
+
+        import torch
+
+        with torch.no_grad():
+            output_ids = model.generate(input_ids, generation_config=gen_config)
+
+        # Decode only the newly generated tokens (strip the prompt).
+        new_tokens = output_ids[0][input_ids.shape[-1]:]
+        return tokenizer.decode(new_tokens, skip_special_tokens=True)
 
 
 @dataclass(slots=True)
