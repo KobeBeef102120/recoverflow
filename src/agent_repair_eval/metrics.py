@@ -161,21 +161,49 @@ def recovery_by_state(episodes: list[dict[str, Any]]) -> pd.DataFrame:
 
 
 def dwell_time_summary(attempts: pd.DataFrame) -> pd.DataFrame:
+    """Summarize how long the model stays in each state once it enters.
+
+    Reports true *run lengths* (number of consecutive attempts in a state before
+    leaving it), not the per-attempt cumulative dwell counter. A single run of
+    length 5 reports mean/median/max dwell = 5, and attempt_count = 5.
+    """
     if attempts.empty:
         return pd.DataFrame()
-    return (
-        attempts.groupby("state")["dwell_time_current_state"]
-        .agg(["count", "median", "mean", "max"])
-        .reset_index()
-        .rename(
-            columns={
-                "count": "attempt_count",
-                "median": "median_dwell_time",
-                "mean": "mean_dwell_time",
-                "max": "max_observed_dwell",
+
+    import statistics
+
+    run_lengths: dict[str, list[int]] = defaultdict(list)
+    occurrences: Counter[str] = Counter()
+
+    # Preserve trajectory order within each episode (flatten_attempts emits rows in order).
+    for _, group in attempts.groupby("episode_id", sort=False):
+        prev_state: str | None = None
+        run_len = 0
+        for state in group["state"]:
+            occurrences[state] += 1
+            if state == prev_state:
+                run_len += 1
+            else:
+                if prev_state is not None:
+                    run_lengths[prev_state].append(run_len)
+                prev_state = state
+                run_len = 1
+        if prev_state is not None:
+            run_lengths[prev_state].append(run_len)
+
+    rows = []
+    for state in sorted(occurrences):
+        lengths = run_lengths[state]
+        rows.append(
+            {
+                "state": state,
+                "attempt_count": occurrences[state],
+                "median_dwell_time": float(statistics.median(lengths)),
+                "mean_dwell_time": sum(lengths) / len(lengths),
+                "max_observed_dwell": max(lengths),
             }
         )
-    )
+    return pd.DataFrame(rows)
 
 
 def regression_summary(episodes: list[dict[str, Any]]) -> pd.DataFrame:

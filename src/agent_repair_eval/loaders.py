@@ -105,7 +105,11 @@ def _evalplus_tests(problem: dict[str, Any], max_tests_per_problem: int | None) 
 
     tests: list[TestCase] = []
     for i, inp in enumerate(inputs):
-        expected = _call_with_input(fn, inp)
+        try:
+            expected = _call_with_input(fn, inp)
+        except Exception:
+            # Canonical solution raised on this input — skip rather than crash the load.
+            continue
         if not _is_json_serializable(inp) or not _is_json_serializable(expected):
             continue
         tests.append(TestCase(input=inp, expected=expected, test_id=f"evalplus_{i}"))
