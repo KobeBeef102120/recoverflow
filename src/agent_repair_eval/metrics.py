@@ -48,6 +48,56 @@ def pass_at_k_summary(episodes: list[dict[str, Any]]) -> pd.DataFrame:
     return df
 
 
+def recovery_by_attempt(episodes: list[dict[str, Any]]) -> pd.DataFrame:
+    """When does the model first pass — and when does recovery actually happen?
+
+    For each attempt index k, reports how many episodes first reached
+    FEEDBACK_PASS exactly at attempt k. Attempt 1 is a first-try success (not a
+    recovery); attempts >= 2 are recoveries. The recovery columns are computed
+    only over episodes that needed at least one repair (i.e. excluding first-try
+    successes), so they answer "given the model recovers, when does it happen?"
+
+    Columns:
+        attempt                  – the attempt index k
+        first_pass_count         – episodes whose first FEEDBACK_PASS was at k
+        is_recovery              – False for k == 1, True otherwise
+        pct_of_recoveries        – share of all recoveries that happened at k
+        cumulative_pct_recoveries– running share of recoveries by attempt k
+    """
+    if not episodes:
+        return pd.DataFrame()
+
+    first_pass_attempt: list[int] = []
+    for ep in episodes:
+        for log in ep["trajectory"]:
+            if log["state"] == State.FEEDBACK_PASS.value:
+                first_pass_attempt.append(log["attempt"])
+                break
+
+    if not first_pass_attempt:
+        return pd.DataFrame()
+
+    counts: Counter[int] = Counter(first_pass_attempt)
+    max_k = max(counts)
+    total_recoveries = sum(c for k, c in counts.items() if k >= 2)
+
+    rows = []
+    running = 0
+    for k in range(1, max_k + 1):
+        c = counts.get(k, 0)
+        is_recovery = k >= 2
+        if is_recovery:
+            running += c
+        rows.append({
+            "attempt": k,
+            "first_pass_count": c,
+            "is_recovery": is_recovery,
+            "pct_of_recoveries": round(c / total_recoveries, 4) if (is_recovery and total_recoveries) else 0.0,
+            "cumulative_pct_recoveries": round(running / total_recoveries, 4) if total_recoveries else 0.0,
+        })
+    return pd.DataFrame(rows)
+
+
 def feedback_loop_success_rate(episodes: list[dict[str, Any]]) -> float:
     """Fraction of episodes where the model passes all feedback tests within K attempts."""
     if not episodes:

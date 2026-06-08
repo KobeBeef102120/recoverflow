@@ -89,8 +89,8 @@ def run_eval(
     from agent_repair_eval.metrics import (
         dwell_time_summary, edit_distance_summary, feedback_loop_success_rate,
         flatten_attempts, hidden_generalization, pass_at_k_summary,
-        recovery_by_state, regression_summary, state_frequencies,
-        transition_matrix, transition_table,
+        recovery_by_attempt, recovery_by_state, regression_summary,
+        state_frequencies, transition_matrix, transition_table,
     )
     from agent_repair_eval.hamsm import build_transition_dataset
 
@@ -184,6 +184,7 @@ def run_eval(
     regression_df  = regression_summary(episodes)
     hidden_df      = hidden_generalization(episodes)
     pass_at_k_df   = pass_at_k_summary(episodes)
+    recovery_attempt_df = recovery_by_attempt(episodes)
     hamsm_df       = build_transition_dataset(episodes, history_length=3)
     edit_dist_df   = edit_distance_summary(attempts_df)
     fb_success     = feedback_loop_success_rate(episodes)
@@ -200,6 +201,7 @@ def run_eval(
         "regression":  regression_df,
         "hidden":      hidden_df,
         "pass_at_k":   pass_at_k_df,
+        "recovery_by_attempt": recovery_attempt_df,
         "hamsm_data":  hamsm_df,
         "edit_distance": edit_dist_df,
         "fb_success":  fb_success,
@@ -236,6 +238,7 @@ def display_results(results: dict[str, Any], *, model_id: str = "") -> None:
     _show_table(results["dwell"],         "Dwell-Time Summary")
     _show_table(results["edit_distance"], "Edit Distance Between Attempts")
     _show_table(results["pass_at_k"],     "Pass@k")
+    _show_table(results.get("recovery_by_attempt"), "Recovery by Attempt (when does recovery happen?)")
     _show_table(results["hidden"],        "Hidden-Test Generalization")
 
     _plot_state_frequencies(results["state_freq"])
@@ -246,6 +249,7 @@ def display_results(results: dict[str, Any], *, model_id: str = "") -> None:
     _plot_transition_matrix(results["transition_matrix"])
     _plot_hidden_generalization(results["hidden"])
     _plot_pass_at_k(results["pass_at_k"])
+    _plot_recovery_by_attempt(results.get("recovery_by_attempt"))
 
 
 # ---------------------------------------------------------------------------
@@ -486,6 +490,39 @@ def _plot_pass_at_k(df: pd.DataFrame) -> None:
     ax.set_ylabel("Cumulative pass rate")
     ax.set_title("Fraction of problems solved by attempt k")
     ax.set_ylim(0, 1)
+    ax.legend()
+    fig.tight_layout()
+    plt.show()
+
+
+def _plot_recovery_by_attempt(df: pd.DataFrame) -> None:
+    if df is None or df.empty:
+        return
+    from IPython.display import display, HTML
+    display(HTML(_section("When Does Recovery Happen?")))
+
+    recoveries = df[df["is_recovery"]]
+    if recoveries.empty or recoveries["first_pass_count"].sum() == 0:
+        display(HTML("<p style='color:#888'>No recoveries occurred — every solved "
+                     "problem passed on the first attempt.</p>"))
+        return
+
+    fig, ax = plt.subplots(figsize=(8, 4.5))
+    attempts = recoveries["attempt"].tolist()
+    bars = ax.bar(attempts, recoveries["pct_of_recoveries"], color="#2ecc71",
+                  label="Share of recoveries at this attempt")
+    ax.plot(attempts, recoveries["cumulative_pct_recoveries"], marker="o",
+            color="#e67e22", label="Cumulative share")
+
+    for b, c in zip(bars, recoveries["first_pass_count"]):
+        ax.text(b.get_x() + b.get_width() / 2, b.get_height() + 0.02,
+                f"n={int(c)}", ha="center", fontsize=9)
+
+    ax.set_xlabel("Attempt at which the model first passed")
+    ax.set_ylabel("Fraction of all recoveries")
+    ax.set_title("Recoveries by attempt (attempt 1 = first-try success, excluded)")
+    ax.set_xticks(attempts)
+    ax.set_ylim(0, 1.05)
     ax.legend()
     fig.tight_layout()
     plt.show()
