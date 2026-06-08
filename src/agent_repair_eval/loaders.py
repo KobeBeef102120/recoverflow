@@ -304,7 +304,10 @@ def _parse_assert_string(code: str, entry_point: str) -> list[TestCase]:
         except (ValueError, TypeError):
             continue
 
-        inp = args if len(args) != 1 else args[0]
+        # Always store as a list of positional args so _call_with_input
+        # splats them correctly. Never unwrap — a single list arg like
+        # below_zero([1,2,3]) must stay as [[1,2,3]], not [1,2,3].
+        inp = args
         if not _is_json_serializable(inp) or not _is_json_serializable(expected):
             continue
         tests.append(TestCase(input=inp, expected=expected))
