@@ -34,6 +34,7 @@ def run_eval(
     max_tests_per_problem: int = 80,
     temperature: float = 0.7,
     max_new_tokens: int = 1200,
+    n_seeds: int = 1,
 ) -> dict[str, Any]:
     """Run the full RecoverFlow evaluation loop and display results inline.
 
@@ -65,6 +66,14 @@ def run_eval(
         set to 0.0–0.1 for near-deterministic single-shot evaluation.
     max_new_tokens:
         Max new tokens to generate per attempt (default 1200).
+    n_seeds:
+        Number of independent runs with different random seeds (default 1).
+        When >1, the whole problem set is evaluated n_seeds times and headline
+        metrics (feedback success, hidden pass, pass@k) are reported as
+        mean ± sample standard deviation, with error bars on the Pass@k chart.
+        Requires temperature > 0 for the seeds to differ. This is what makes
+        the results paper-grade (variance / error bars rather than point
+        estimates).
 
     Returns
     -------
@@ -154,65 +163,132 @@ def run_eval(
         memory_limit_mb=memory_limit_mb,
     )
 
+    if n_seeds > 1 and not (temperature and temperature > 0):
+        print(
+            "  WARNING: n_seeds > 1 but temperature is 0 (greedy decoding).\n"
+            "  Every seed will produce identical results and variance will be 0.\n"
+            "  Use temperature >= 0.5 to measure genuine run-to-run variance.\n"
+        )
+
+    # ── Run N independent seeds (N=1 is the ordinary single run) ──────────────
+    per_seed_episodes: list[list[dict[str, Any]]] = []
+    per_seed_metrics: list[dict[str, float]] = []
+    for seed in range(n_seeds):
+        if n_seeds > 1:
+            _seed_everything(seed)
+            print(f"Seed {seed + 1}/{n_seeds}:")
+        episodes = _run_episode_pass(
+            problems, llm, config,
+            max_attempts=max_attempts,
+            split_seed=split_seed,
+            feedback_policy=feedback_policy,
+            episode_seed=seed,
+        )
+        per_seed_episodes.append(episodes)
+        per_seed_metrics.append(_headline_metrics(episodes))
+
+    # Detailed tables/charts use the first seed's episodes; variance is reported
+    # across all seeds.
+    episodes = per_seed_episodes[0]
+    results = _build_results(episodes)
+
+    if n_seeds > 1:
+        from agent_repair_eval.metrics import summarize_seed_runs
+        results["seed_variance"] = summarize_seed_runs(per_seed_metrics)
+        results["n_seeds"] = n_seeds
+        results["per_seed_metrics"] = per_seed_metrics
+
+    display_results(results, model_id=model_id)
+    return results
+
+
+def _run_episode_pass(problems, llm, config, *, max_attempts, split_seed,
+                      feedback_policy, episode_seed):
+    """Run one full pass over all problems and return jsonable episode dicts."""
+    from agent_repair_eval.runner import run_problem_episode
+    from agent_repair_eval.schemas import to_jsonable
+
     episodes: list[dict[str, Any]] = []
-    outcome_counts: dict[str, int] = {}
     for i, problem in enumerate(problems, 1):
         episode = run_problem_episode(
-            problem,
-            llm,
+            problem, llm,
             max_attempts=max_attempts,
             sandbox_config=config,
             feedback_ratio=0.2,
             split_seed=split_seed,
             feedback_policy=feedback_policy,
+            episode_seed=episode_seed,
         )
-        ep_dict = to_jsonable(episode)
-        episodes.append(ep_dict)
-        outcome = episode.final_outcome.value
-        outcome_counts[outcome] = outcome_counts.get(outcome, 0) + 1
+        episodes.append(to_jsonable(episode))
         bar = _progress_bar(i, len(problems))
-        print(f"\r{bar}  {i}/{len(problems)}  latest: {problem.problem_id} -> {outcome}", end="", flush=True)
-
+        print(f"\r{bar}  {i}/{len(problems)}  latest: {problem.problem_id} "
+              f"-> {episode.final_outcome.value}", end="", flush=True)
     print("\n")
+    return episodes
 
-    # Compute all metrics
-    attempts_df    = flatten_attempts(episodes)
-    state_freq_df  = state_frequencies(attempts_df)
-    recovery_df    = recovery_by_state(episodes)
-    trans_table_df = transition_table(episodes)
-    trans_matrix_df = transition_matrix(episodes)
-    dwell_df       = dwell_time_summary(attempts_df)
-    regression_df  = regression_summary(episodes)
-    hidden_df      = hidden_generalization(episodes)
-    pass_at_k_df   = pass_at_k_summary(episodes)
-    recovery_attempt_df = recovery_by_attempt(episodes)
-    recovery_source_df  = recovery_source_states(episodes)
-    hamsm_df       = build_transition_dataset(episodes, history_length=3)
-    edit_dist_df   = edit_distance_summary(attempts_df)
-    fb_success     = feedback_loop_success_rate(episodes)
-    hidden_pass    = sum(1 for ep in episodes if ep["final_outcome"] == "FINAL_PASS") / len(episodes)
 
-    results = {
+def _headline_metrics(episodes: list[dict[str, Any]]) -> dict[str, float]:
+    """Per-seed scalar metrics that we aggregate to mean ± σ across seeds."""
+    from agent_repair_eval.metrics import feedback_loop_success_rate, pass_at_k_summary
+
+    out: dict[str, float] = {
+        "feedback_success_rate": feedback_loop_success_rate(episodes),
+        "hidden_pass_rate": sum(1 for ep in episodes if ep["final_outcome"] == "FINAL_PASS") / len(episodes),
+    }
+    pak = pass_at_k_summary(episodes)
+    if not pak.empty:
+        for _, row in pak.iterrows():
+            out[f"pass_at_{int(row['k'])}"] = float(row["feedback_pass_at_k"])
+    return out
+
+
+def _build_results(episodes: list[dict[str, Any]]) -> dict[str, Any]:
+    """Compute the full metric suite for one set of episodes."""
+    from agent_repair_eval.metrics import (
+        dwell_time_summary, edit_distance_summary, feedback_loop_success_rate,
+        flatten_attempts, hidden_generalization, pass_at_k_summary,
+        recovery_by_attempt, recovery_by_state, recovery_source_states,
+        regression_summary, state_frequencies, transition_matrix, transition_table,
+    )
+    from agent_repair_eval.hamsm import build_transition_dataset
+
+    attempts_df = flatten_attempts(episodes)
+    return {
         "episodes":    episodes,
         "attempts":    attempts_df,
-        "state_freq":  state_freq_df,
-        "recovery":    recovery_df,
-        "transitions": trans_table_df,
-        "transition_matrix": trans_matrix_df,
-        "dwell":       dwell_df,
-        "regression":  regression_df,
-        "hidden":      hidden_df,
-        "pass_at_k":   pass_at_k_df,
-        "recovery_by_attempt": recovery_attempt_df,
-        "recovery_source_states": recovery_source_df,
-        "hamsm_data":  hamsm_df,
-        "edit_distance": edit_dist_df,
-        "fb_success":  fb_success,
-        "hidden_pass": hidden_pass,
+        "state_freq":  state_frequencies(attempts_df),
+        "recovery":    recovery_by_state(episodes),
+        "transitions": transition_table(episodes),
+        "transition_matrix": transition_matrix(episodes),
+        "dwell":       dwell_time_summary(attempts_df),
+        "regression":  regression_summary(episodes),
+        "hidden":      hidden_generalization(episodes),
+        "pass_at_k":   pass_at_k_summary(episodes),
+        "recovery_by_attempt": recovery_by_attempt(episodes),
+        "recovery_source_states": recovery_source_states(episodes),
+        "hamsm_data":  build_transition_dataset(episodes, history_length=3),
+        "edit_distance": edit_distance_summary(attempts_df),
+        "fb_success":  feedback_loop_success_rate(episodes),
+        "hidden_pass": sum(1 for ep in episodes if ep["final_outcome"] == "FINAL_PASS") / len(episodes),
     }
 
-    display_results(results, model_id=model_id)
-    return results
+
+def _seed_everything(seed: int) -> None:
+    """Seed Python, NumPy, and Torch RNGs so a run is reproducible-but-distinct."""
+    import random
+    random.seed(seed)
+    try:
+        import numpy as np
+        np.random.seed(seed)
+    except Exception:
+        pass
+    try:
+        import torch
+        torch.manual_seed(seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(seed)
+    except Exception:
+        pass
 
 
 def display_results(results: dict[str, Any], *, model_id: str = "") -> None:
@@ -223,18 +299,25 @@ def display_results(results: dict[str, Any], *, model_id: str = "") -> None:
     fb  = results["fb_success"]
     hid = results["hidden_pass"]
     n   = len(results["episodes"])
+    n_seeds = results.get("n_seeds", 1)
 
     display(HTML(_section("Summary")))
+    seed_note = f" (1 seed; run with n_seeds>1 for mean ± σ)" if n_seeds == 1 else f" (first of {n_seeds} seeds)"
     display(HTML(
         f"<table style='font-size:15px;border-collapse:collapse'>"
         f"<tr><td style='padding:6px 16px'><b>Model</b></td><td>{model_id or 'N/A'}</td></tr>"
-        f"<tr><td style='padding:6px 16px'><b>Episodes</b></td><td>{n}</td></tr>"
+        f"<tr><td style='padding:6px 16px'><b>Episodes</b></td><td>{n}{seed_note}</td></tr>"
         f"<tr><td style='padding:6px 16px'><b>Feedback-loop success rate (B=1)</b></td>"
         f"<td>{fb:.1%}</td></tr>"
         f"<tr><td style='padding:6px 16px'><b>Hidden-test pass rate (Y=1)</b></td>"
         f"<td>{hid:.1%}</td></tr>"
         f"</table>"
     ))
+
+    # Variance across seeds — the paper-grade "mean ± σ" artifact.
+    if n_seeds > 1 and results.get("seed_variance") is not None:
+        _show_table(results["seed_variance"],
+                    f"Run-to-Run Variance across {n_seeds} seeds (mean ± σ)")
 
     _show_table(results["state_freq"],    "State Frequencies")
     _show_table(results["recovery"],      "Recovery by State")
@@ -252,7 +335,7 @@ def display_results(results: dict[str, Any], *, model_id: str = "") -> None:
     _show_transition_table(results["transition_matrix"])
     _plot_transition_matrix(results["transition_matrix"])
     _plot_hidden_generalization(results["hidden"])
-    _plot_pass_at_k(results["pass_at_k"])
+    _plot_pass_at_k(results["pass_at_k"], seed_variance=results.get("seed_variance"))
     _plot_recovery_by_attempt(results.get("recovery_by_attempt"))
     _plot_recovery_source_states(results.get("recovery_source_states"))
 
@@ -483,13 +566,27 @@ def _plot_edit_distance(df: pd.DataFrame) -> None:
     plt.show()
 
 
-def _plot_pass_at_k(df: pd.DataFrame) -> None:
+def _plot_pass_at_k(df: pd.DataFrame, seed_variance: pd.DataFrame = None) -> None:
     if df is None or df.empty:
         return
     from IPython.display import display, HTML
     display(HTML(_section("Feedback-Loop Pass@k")))
+
+    # If multi-seed variance is available, draw error bars (± σ) on each k.
+    yerr = None
+    if seed_variance is not None and not seed_variance.empty:
+        std_by_k = {}
+        for _, row in seed_variance.iterrows():
+            m = str(row["metric"])
+            if m.startswith("pass_at_"):
+                std_by_k[int(m.rsplit("_", 1)[1])] = row["std"]
+        if std_by_k:
+            yerr = [std_by_k.get(int(k), 0.0) for k in df["k"]]
+
     fig, ax = plt.subplots(figsize=(7, 4))
-    ax.plot(df["k"], df["feedback_pass_at_k"], marker="o", label="Feedback pass@k", color="#3498db")
+    ax.errorbar(df["k"], df["feedback_pass_at_k"], yerr=yerr, marker="o",
+                capsize=4, label="Feedback pass@k" + (" (± σ)" if yerr else ""),
+                color="#3498db")
     ax.axhline(df["hidden_pass_rate"].iloc[0], linestyle="--", color="#e74c3c", label="Hidden-test pass rate")
     ax.set_xlabel("Attempt k")
     ax.set_ylabel("Cumulative pass rate")

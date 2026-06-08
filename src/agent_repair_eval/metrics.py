@@ -98,6 +98,43 @@ def recovery_by_attempt(episodes: list[dict[str, Any]]) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def summarize_seed_runs(per_seed: list[dict[str, float]]) -> pd.DataFrame:
+    """Aggregate per-seed scalar metrics into mean ± sample-σ across seeds.
+
+    per_seed: one dict per seed, mapping metric name -> value (e.g. feedback
+    success rate, hidden pass rate, pass@k). Returns a table with mean, sample
+    standard deviation, min, max, n_seeds, and a preformatted "mean ± σ" string
+    suitable for paper tables.
+    """
+    import statistics
+
+    if not per_seed:
+        return pd.DataFrame()
+
+    # Use the union of keys, preserving the order of the first seed.
+    keys = list(per_seed[0].keys())
+    for d in per_seed[1:]:
+        for k in d:
+            if k not in keys:
+                keys.append(k)
+
+    rows = []
+    for key in keys:
+        vals = [d[key] for d in per_seed if key in d]
+        mean = sum(vals) / len(vals)
+        std = statistics.stdev(vals) if len(vals) > 1 else 0.0
+        rows.append({
+            "metric": key,
+            "mean": round(mean, 4),
+            "std": round(std, 4),
+            "min": round(min(vals), 4),
+            "max": round(max(vals), 4),
+            "n_seeds": len(vals),
+            "mean_pm_std": f"{mean:.3f} ± {std:.3f}",
+        })
+    return pd.DataFrame(rows)
+
+
 def recovery_source_states(episodes: list[dict[str, Any]]) -> pd.DataFrame:
     """Which error state was the model in right before it recovered?
 

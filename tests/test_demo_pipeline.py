@@ -19,7 +19,7 @@ def test_demo_episode_recovers():
         problem,
         llm,
         max_attempts=3,
-        sandbox_config=SandboxConfig(timeout_seconds=2.0),
+        sandbox_config=SandboxConfig(timeout_seconds=30.0),
         feedback_ratio=0.4,
         split_seed=42,
     )

@@ -28,7 +28,10 @@ def _run():
     llm = RecordingLLM()
     run_problem_episode(
         problem, llm, max_attempts=3,
-        sandbox_config=SandboxConfig(timeout_seconds=2.0),
+        # Generous timeout: the sandbox spawns a fresh Python subprocess, whose
+        # startup can exceed a tight limit on a loaded/Windows machine. The code
+        # under test is trivial arithmetic, so a large limit avoids flaky TIMEOUTs.
+        sandbox_config=SandboxConfig(timeout_seconds=30.0),
         feedback_ratio=0.4, split_seed=42,
     )
     return {a: p for a, p in llm.prompts}
