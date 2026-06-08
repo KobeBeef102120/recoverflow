@@ -32,7 +32,7 @@ def run_eval(
     memory_limit_mb: int = 512,
     split_seed: int = 42,
     max_tests_per_problem: int = 80,
-    temperature: float = 0.1,
+    temperature: float = 0.7,
     max_new_tokens: int = 1200,
 ) -> dict[str, Any]:
     """Run the full RecoverFlow evaluation loop and display results inline.
@@ -60,7 +60,9 @@ def run_eval(
     max_tests_per_problem:
         Cap on tests loaded per problem (default 80).
     temperature:
-        Sampling temperature for the model (default 0.1).
+        Sampling temperature for the model (default 0.7). Higher values make
+        retries produce different code, which is needed to observe recovery;
+        set to 0.0–0.1 for near-deterministic single-shot evaluation.
     max_new_tokens:
         Max new tokens to generate per attempt (default 1200).
 

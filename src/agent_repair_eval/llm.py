@@ -205,7 +205,7 @@ class LocalHuggingFaceClient:
     """
 
     model_id: str = "Qwen/Qwen2.5-Coder-0.5B-Instruct"
-    temperature: float = 0.1
+    temperature: float = 0.7
     max_new_tokens: int = 1200
     _pipeline: object = None
 
