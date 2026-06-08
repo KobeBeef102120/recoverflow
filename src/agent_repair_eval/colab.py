@@ -78,7 +78,7 @@ def run_eval(
     """
     _check_colab_deps()
 
-    from agent_repair_eval.llm import LocalHuggingFaceClient
+    from agent_repair_eval.llm import LocalHuggingFaceClient, validate_model
     from agent_repair_eval.loaders import load_evalplus_benchmark
     from agent_repair_eval.runner import run_problem_episode
     from agent_repair_eval.schemas import SandboxConfig, to_jsonable
@@ -99,6 +99,8 @@ def run_eval(
         max_tests_per_problem=max_tests_per_problem,
     )
     print(f"  Loaded {len(problems)} problems.\n")
+
+    validate_model(model_id)
 
     print(f"Loading model {model_id!r} (first call downloads weights)...")
     llm = LocalHuggingFaceClient(

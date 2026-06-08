@@ -117,6 +117,83 @@ class HuggingFaceChatClient:
         return content or ""
 
 
+def validate_model(model_id: str, *, warn_size_gb: float = 8.0) -> None:
+    """Check whether a HuggingFace model is likely to work with RecoverFlow.
+
+    Raises ValueError with a clear message if the model is definitely incompatible.
+    Prints warnings for things that might cause problems (large size, base model name).
+    Does not download weights — only fetches the Hub metadata JSON.
+    """
+    try:
+        from huggingface_hub import model_info as hf_model_info
+        from huggingface_hub.utils import RepositoryNotFoundError, GatedRepoError
+    except ImportError as exc:
+        raise RuntimeError("Install huggingface_hub: pip install huggingface_hub") from exc
+
+    print(f"  Checking model {model_id!r} on HuggingFace Hub...")
+
+    try:
+        info = hf_model_info(model_id)
+    except RepositoryNotFoundError:
+        raise ValueError(
+            f"Model {model_id!r} was not found on HuggingFace Hub.\n"
+            "Check the model ID for typos at https://huggingface.co/models"
+        )
+    except GatedRepoError:
+        raise ValueError(
+            f"Model {model_id!r} is gated (requires acceptance of terms).\n"
+            "Visit the model page on HuggingFace and accept the terms, then set HF_TOKEN."
+        )
+    except Exception as exc:
+        print(f"  WARNING: Could not fetch Hub metadata ({exc}). Proceeding anyway.")
+        return
+
+    # Check pipeline tag
+    pipeline_tag = getattr(info, "pipeline_tag", None)
+    if pipeline_tag and pipeline_tag != "text-generation":
+        raise ValueError(
+            f"Model {model_id!r} has pipeline_tag={pipeline_tag!r}.\n"
+            "RecoverFlow requires a text-generation model."
+        )
+
+    # Warn if this looks like a base model (no instruct/chat in name)
+    name_lower = model_id.lower()
+    instruct_hints = ("instruct", "chat", "-it", "sft", "rlhf", "dpo", "assistant")
+    if not any(h in name_lower for h in instruct_hints):
+        print(
+            f"  WARNING: {model_id!r} does not look like an instruction-tuned model\n"
+            "  (no 'instruct'/'chat' in the name). Base models will not follow prompts\n"
+            "  and will produce garbage output. Use an -Instruct variant instead."
+        )
+
+    # Check safetensors size to estimate parameter count
+    safetensors = [
+        s for s in (info.safetensors or {}).get("parameters", {}).items()
+    ] if info.safetensors else []
+
+    total_params = None
+    if info.safetensors and hasattr(info.safetensors, "total"):
+        total_params = info.safetensors.total
+    elif info.safetensors and isinstance(info.safetensors, dict):
+        total_params = info.safetensors.get("total")
+
+    if total_params:
+        size_gb = total_params * 2 / 1e9  # bfloat16 estimate
+        if size_gb > warn_size_gb:
+            print(
+                f"  WARNING: Model has ~{total_params/1e9:.1f}B parameters "
+                f"(~{size_gb:.1f} GB in bfloat16).\n"
+                f"  This exceeds {warn_size_gb:.0f} GB — it may OOM on free Colab (15 GB VRAM)\n"
+                "  or run very slowly on CPU. Consider a smaller model."
+            )
+        else:
+            print(f"  Size: ~{total_params/1e9:.1f}B parameters (~{size_gb:.1f} GB). OK.")
+    else:
+        print("  Could not determine model size from Hub metadata.")
+
+    print(f"  Model {model_id!r} looks compatible.\n")
+
+
 @dataclass
 class LocalHuggingFaceClient:
     """Run a HuggingFace model locally via transformers (no API credits needed).
