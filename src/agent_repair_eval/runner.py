@@ -40,6 +40,7 @@ def run_problem_episode(
     prompt = build_initial_prompt(problem.prompt)
     trajectory: list[AttemptLog] = []
     code_history: list[str] = []
+    feedback_history: list[dict] = []
     final_code = ""
     counts: Counter[str] = Counter()
     previous_state: State | None = None
@@ -103,7 +104,15 @@ def run_problem_episode(
                 feedback,
                 stderr=result.stderr_excerpt,
                 stdout=result.stdout_excerpt,
+                attempt_history=feedback_history if feedback_history else None,
             )
+            feedback_history.append({
+                "attempt": attempt,
+                "code": candidate_code,
+                "feedback": feedback,
+                "stderr": result.stderr_excerpt,
+                "stdout": result.stdout_excerpt,
+            })
 
     if trajectory[-1].state != State.FEEDBACK_PASS and trajectory[-1].state != State.SECURITY_VIOLATION:
         counts[State.TERMINAL_UNRESOLVED.value] += 1
