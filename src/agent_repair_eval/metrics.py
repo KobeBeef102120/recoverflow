@@ -23,14 +23,19 @@ def pass_at_k_summary(episodes: list[dict[str, Any]]) -> pd.DataFrame:
         return pd.DataFrame()
 
     n = len(episodes)
-    max_k = max((len(ep["trajectory"]) for ep in episodes), default=0)
+    # Exclude TERMINAL_UNRESOLVED sentinel from trajectory length
+    real_attempts = lambda ep: [
+        log for log in ep["trajectory"]
+        if log["state"] != State.TERMINAL_UNRESOLVED.value
+    ]
+    max_k = max((len(real_attempts(ep)) for ep in episodes), default=0)
     rows = []
     for k in range(1, max_k + 1):
         feedback_pass = sum(
             1 for ep in episodes
             if any(
                 log["state"] == State.FEEDBACK_PASS.value
-                for log in ep["trajectory"][:k]
+                for log in real_attempts(ep)[:k]
             )
         ) / n
         rows.append({"k": k, "feedback_pass_at_k": round(feedback_pass, 4)})
@@ -111,20 +116,26 @@ def recovery_by_state(episodes: list[dict[str, Any]]) -> pd.DataFrame:
     transitions_from: Counter[str] = Counter()
     persisted: Counter[str] = Counter()
 
+    _non_error = {State.FEEDBACK_PASS.value, State.TERMINAL_UNRESOLVED.value}
+
     for ep in episodes:
         states = [log["state"] for log in ep["trajectory"]]
-        unique_error_states = {s for s in states if s not in {State.FEEDBACK_PASS.value}}
-        feedback_success = State.FEEDBACK_PASS.value in states
         hidden_success = ep["final_outcome"] == "FINAL_PASS"
 
-        for s in unique_error_states:
+        for i, s in enumerate(states):
+            if s in _non_error:
+                continue
+            # Only count recovery if FEEDBACK_PASS appears AFTER this error state
+            recovered_after = State.FEEDBACK_PASS.value in states[i + 1:]
             denominators[s] += 1
-            if feedback_success:
+            if recovered_after:
                 feedback_recovered[s] += 1
             if hidden_success:
                 hidden_recovered[s] += 1
 
         for a, b in zip(states, states[1:]):
+            if a in _non_error:
+                continue
             transitions_from[a] += 1
             if b == State.FEEDBACK_PASS.value:
                 one_step_recovered[a] += 1
