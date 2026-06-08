@@ -68,6 +68,7 @@ def run_problem_episode(
             else choose_feedback_type(result, feedback_policy)
         )
         delta_pass_rate = _compute_delta_pass_rate(trajectory, result.pass_rate)
+        edit_dist = _normalized_edit_distance(code_history[-2], candidate_code) if len(code_history) >= 2 else None
 
         log = _build_attempt_log(
             episode_id=episode_id,
@@ -83,6 +84,7 @@ def run_problem_episode(
             counts=counts,
             code_hash=sha256_text(candidate_code),
             delta_pass_rate=delta_pass_rate,
+            edit_distance=edit_dist,
         )
         trajectory.append(log)
 
@@ -202,6 +204,27 @@ def _compute_delta_pass_rate(trajectory: list[AttemptLog], current_pass_rate: fl
     return current_pass_rate - trajectory[-1].feedback_pass_rate
 
 
+def _normalized_edit_distance(a: str, b: str) -> float:
+    """Character-level Levenshtein distance normalized to [0, 1]."""
+    if a == b:
+        return 0.0
+    len_a, len_b = len(a), len(b)
+    if len_a == 0 or len_b == 0:
+        return 1.0
+    # Keep only two rows to stay memory-efficient for large code strings
+    prev = list(range(len_b + 1))
+    for i, ca in enumerate(a, 1):
+        curr = [i] + [0] * len_b
+        for j, cb in enumerate(b, 1):
+            curr[j] = min(
+                prev[j] + 1,
+                curr[j - 1] + 1,
+                prev[j - 1] + (0 if ca == cb else 1),
+            )
+        prev = curr
+    return prev[len_b] / max(len_a, len_b)
+
+
 def _build_attempt_log(
     *,
     episode_id: str,
@@ -217,6 +240,7 @@ def _build_attempt_log(
     counts: Counter[str],
     code_hash: str,
     delta_pass_rate: float,
+    edit_distance: float | None = None,
 ) -> AttemptLog:
     return AttemptLog(
         episode_id=episode_id,
@@ -240,6 +264,7 @@ def _build_attempt_log(
         ordered_history=ordered_history,
         cumulative_state_counts=dict(counts),
         code_hash=code_hash,
+        edit_distance_from_previous=edit_distance,
         failing_input=result.failing_input,
         expected_output=result.expected_output,
         actual_output=result.actual_output,

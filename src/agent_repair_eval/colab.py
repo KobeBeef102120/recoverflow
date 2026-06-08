@@ -83,10 +83,10 @@ def run_eval(
     from agent_repair_eval.runner import run_problem_episode
     from agent_repair_eval.schemas import SandboxConfig, to_jsonable
     from agent_repair_eval.metrics import (
-        dwell_time_summary, feedback_loop_success_rate, flatten_attempts,
-        hidden_generalization, pass_at_k_summary, recovery_by_state,
-        regression_summary, state_frequencies, transition_matrix,
-        transition_table,
+        dwell_time_summary, edit_distance_summary, feedback_loop_success_rate,
+        flatten_attempts, hidden_generalization, pass_at_k_summary,
+        recovery_by_state, regression_summary, state_frequencies,
+        transition_matrix, transition_table,
     )
     from agent_repair_eval.hamsm import build_transition_dataset
 
@@ -146,6 +146,7 @@ def run_eval(
     hidden_df      = hidden_generalization(episodes)
     pass_at_k_df   = pass_at_k_summary(episodes)
     hamsm_df       = build_transition_dataset(episodes, history_length=3)
+    edit_dist_df   = edit_distance_summary(attempts_df)
     fb_success     = feedback_loop_success_rate(episodes)
     hidden_pass    = sum(1 for ep in episodes if ep["final_outcome"] == "FINAL_PASS") / len(episodes)
 
@@ -161,6 +162,7 @@ def run_eval(
         "hidden":      hidden_df,
         "pass_at_k":   pass_at_k_df,
         "hamsm_data":  hamsm_df,
+        "edit_distance": edit_dist_df,
         "fb_success":  fb_success,
         "hidden_pass": hidden_pass,
     }
@@ -190,15 +192,17 @@ def display_results(results: dict[str, Any], *, model_id: str = "") -> None:
         f"</table>"
     ))
 
-    _show_table(results["state_freq"],  "State Frequencies")
-    _show_table(results["recovery"],    "Recovery by State")
-    _show_table(results["dwell"],       "Dwell-Time Summary")
-    _show_table(results["pass_at_k"],   "Pass@k")
-    _show_table(results["hidden"],      "Hidden-Test Generalization")
+    _show_table(results["state_freq"],    "State Frequencies")
+    _show_table(results["recovery"],      "Recovery by State")
+    _show_table(results["dwell"],         "Dwell-Time Summary")
+    _show_table(results["edit_distance"], "Edit Distance Between Attempts")
+    _show_table(results["pass_at_k"],     "Pass@k")
+    _show_table(results["hidden"],        "Hidden-Test Generalization")
 
     _plot_state_frequencies(results["state_freq"])
     _plot_recovery_rates(results["recovery"])
     _plot_dwell_time(results["dwell"])
+    _plot_edit_distance(results["edit_distance"])
     _plot_transition_matrix(results["transition_matrix"])
     _plot_hidden_generalization(results["hidden"])
     _plot_pass_at_k(results["pass_at_k"])
@@ -255,17 +259,16 @@ def _show_table(df: pd.DataFrame, title: str) -> None:
         return
     from IPython.display import display, HTML
     display(HTML(_section(title)))
-    styled = (
-        df.style
-        .format(precision=4)
-        .set_table_styles([
-            {"selector": "th", "props": [("background-color", "#4A90D9"), ("color", "white"), ("padding", "6px 10px")]},
-            {"selector": "td", "props": [("padding", "5px 10px"), ("border-bottom", "1px solid #eee")]},
-            {"selector": "tr:hover td", "props": [("background-color", "#f0f7ff")]},
-        ])
-        .hide(axis="index")
-    )
-    display(styled)
+    html = df.to_html(index=False, border=0)
+    display(HTML(f"""
+    <style>
+      .rf-table {{ border-collapse: collapse; font-size: 14px; width: 100%; }}
+      .rf-table th {{ background-color: #4A90D9; color: white; padding: 7px 12px; text-align: left; }}
+      .rf-table td {{ padding: 6px 12px; border-bottom: 1px solid #eee; }}
+      .rf-table tr:hover td {{ background-color: #f0f7ff; }}
+    </style>
+    {html.replace('<table', '<table class="rf-table"')}
+    """))
 
 
 def _plot_state_frequencies(df: pd.DataFrame) -> None:
@@ -356,6 +359,40 @@ def _plot_hidden_generalization(df: pd.DataFrame) -> None:
     ax.set_ylim(0, 1)
     ax.set_ylabel("Hidden-test success rate")
     ax.set_title("Does passing feedback tests generalize to hidden tests?")
+    fig.tight_layout()
+    plt.show()
+
+
+def _plot_edit_distance(df: pd.DataFrame) -> None:
+    if df is None or df.empty:
+        return
+    from IPython.display import display, HTML
+    display(HTML(_section("Edit Distance Between Attempts (by State)")))
+
+    buckets = ["identical", "cosmetic", "targeted", "rewrite", "full_replacement"]
+    colors  = ["#e74c3c", "#e67e22", "#f1c40f", "#2ecc71", "#3498db"]
+    present = [b for b in buckets if b in df.columns]
+
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+
+    # Left: mean edit distance per state
+    axes[0].bar(df["state"], df["mean"], color="#9b59b6")
+    axes[0].set_ylim(0, 1)
+    axes[0].set_ylabel("Mean normalized edit distance")
+    axes[0].set_title("How much the model changes its code per state")
+    axes[0].tick_params(axis="x", rotation=40)
+
+    # Right: stacked bar of edit buckets per state
+    bottom = [0] * len(df)
+    for bucket, color in zip(present, colors):
+        vals = df[bucket].tolist()
+        axes[1].bar(df["state"], vals, bottom=bottom, label=bucket, color=color)
+        bottom = [b + v for b, v in zip(bottom, vals)]
+    axes[1].set_ylabel("Number of repair attempts")
+    axes[1].set_title("Edit size distribution per error state")
+    axes[1].tick_params(axis="x", rotation=40)
+    axes[1].legend(loc="upper right", fontsize=8)
+
     fig.tight_layout()
     plt.show()
 

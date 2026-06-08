@@ -194,6 +194,50 @@ def regression_summary(episodes: list[dict[str, Any]]) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def edit_distance_summary(attempts: pd.DataFrame) -> pd.DataFrame:
+    """Summarize normalized edit distance between consecutive attempts, grouped by state.
+
+    edit_distance_from_previous is None for attempt 1 (no prior code).
+    Buckets: identical (0), cosmetic (0–0.05), targeted (0.05–0.20),
+             rewrite (0.20–0.50), full_replacement (>0.50).
+    """
+    repair = attempts[attempts["edit_distance_from_previous"].notna()].copy()
+    if repair.empty:
+        return pd.DataFrame()
+
+    def _bucket(d: float) -> str:
+        if d == 0.0:
+            return "identical"
+        if d < 0.05:
+            return "cosmetic"
+        if d < 0.20:
+            return "targeted"
+        if d < 0.50:
+            return "rewrite"
+        return "full_replacement"
+
+    repair["edit_bucket"] = repair["edit_distance_from_previous"].apply(_bucket)
+
+    summary = (
+        repair.groupby("state")["edit_distance_from_previous"]
+        .agg(count="count", mean="mean", median="median", min="min", max="max")
+        .reset_index()
+        .round(4)
+    )
+
+    bucket_counts = (
+        repair.groupby(["state", "edit_bucket"])
+        .size()
+        .unstack(fill_value=0)
+        .reset_index()
+    )
+    for col in ["identical", "cosmetic", "targeted", "rewrite", "full_replacement"]:
+        if col not in bucket_counts.columns:
+            bucket_counts[col] = 0
+
+    return summary.merge(bucket_counts, on="state", how="left")
+
+
 def hidden_generalization(episodes: list[dict[str, Any]]) -> pd.DataFrame:
     groups = defaultdict(lambda: {"count": 0, "hidden_pass": 0})
     for ep in episodes:

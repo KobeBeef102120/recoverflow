@@ -86,6 +86,7 @@ class AttemptLog:
     ordered_history: list[str]
     cumulative_state_counts: dict[str, int]
     code_hash: str
+    edit_distance_from_previous: float | None = None  # 0.0–1.0 normalized; None on attempt 1
     failing_input: Any = None
     expected_output: Any = None
     actual_output: Any = None
