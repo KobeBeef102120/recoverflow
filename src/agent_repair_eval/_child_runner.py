@@ -257,6 +257,8 @@ def _run_payload(payload: dict[str, Any]) -> dict[str, Any]:
         return result
 
     passed = 0
+    first_failure: dict | None = None
+
     for test in tests:
         test_input = test["input"]
         expected = test["expected"]
@@ -295,28 +297,42 @@ def _run_payload(payload: dict[str, Any]) -> dict[str, Any]:
 
         if actual == expected:
             passed += 1
-        else:
-            result.update(
-                {
-                    "state": "ASSERTION_FAILURE",
-                    "passed": passed,
-                    "failing_input": _json_safe(test_input),
-                    "expected_output": _json_safe(expected),
-                    "actual_output": _json_safe(actual),
-                }
-            )
-            result["runtime_ms"] = int((time.perf_counter() - started) * 1000)
-            return result
+        elif first_failure is None:
+            first_failure = {
+                "failing_input": _json_safe(test_input),
+                "expected_output": _json_safe(expected),
+                "actual_output": _json_safe(actual),
+            }
+
+    result["runtime_ms"] = int((time.perf_counter() - started) * 1000)
+
+    if first_failure is None:
+        result.update(
+            {
+                "state": "FEEDBACK_PASS",
+                "passed": passed,
+                "stdout_excerpt": stdout_buffer.getvalue()[:max_stdout_chars] or None,
+                "stderr_excerpt": stderr_buffer.getvalue()[:max_stderr_chars] or None,
+            }
+        )
+        return result
+
+    # Classify by how many tests passed (semantic depth)
+    total = len(tests)
+    if passed == 0:
+        state = "WRONG_ALGORITHM"
+    elif passed >= total - 1:
+        state = "NEAR_MISS"
+    else:
+        state = "PARTIAL_PASS"
 
     result.update(
         {
-            "state": "FEEDBACK_PASS",
+            "state": state,
             "passed": passed,
-            "stdout_excerpt": stdout_buffer.getvalue()[:max_stdout_chars] or None,
-            "stderr_excerpt": stderr_buffer.getvalue()[:max_stderr_chars] or None,
+            **first_failure,
         }
     )
-    result["runtime_ms"] = int((time.perf_counter() - started) * 1000)
     return result
 
 

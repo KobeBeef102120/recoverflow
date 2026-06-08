@@ -19,7 +19,10 @@ class State(StrEnum):
     TYPE_VALUE_ERROR = "TYPE_VALUE_ERROR"
     INDEX_KEY_ERROR = "INDEX_KEY_ERROR"
     ZERO_DIVISION_ERROR = "ZERO_DIVISION_ERROR"
-    ASSERTION_FAILURE = "ASSERTION_FAILURE"
+    WRONG_ALGORITHM = "WRONG_ALGORITHM"      # runs cleanly, passes 0/N tests
+    PARTIAL_PASS = "PARTIAL_PASS"            # passes 1 to N-2 tests
+    NEAR_MISS = "NEAR_MISS"                  # passes N-1/N tests (one test away)
+    ASSERTION_FAILURE = "ASSERTION_FAILURE"  # kept for legacy compatibility
     TIMEOUT = "TIMEOUT"
     MEMORY_ERROR = "MEMORY_ERROR"
     OUTPUT_FORMAT_ERROR = "OUTPUT_FORMAT_ERROR"
@@ -56,6 +59,9 @@ STATE_PRIORITY: list[State] = [
     State.INDEX_KEY_ERROR,
     State.ZERO_DIVISION_ERROR,
     State.OUTPUT_FORMAT_ERROR,
+    State.WRONG_ALGORITHM,
+    State.PARTIAL_PASS,
+    State.NEAR_MISS,
     State.ASSERTION_FAILURE,
     State.FEEDBACK_PASS,
     State.TERMINAL_UNRESOLVED,
@@ -75,9 +81,27 @@ NON_RUNNABLE_STATES: set[State] = {
 }
 
 RUNNABLE_FAILURE_STATES: set[State] = {
+    State.WRONG_ALGORITHM,
+    State.PARTIAL_PASS,
+    State.NEAR_MISS,
     State.ASSERTION_FAILURE,
     State.OUTPUT_FORMAT_ERROR,
 }
+
+# Thresholds for assertion-family subdivision
+WRONG_ALGORITHM_MAX_PASS_RATE = 0.0       # 0/N tests pass
+NEAR_MISS_MIN_PASS_RATE_FRACTION = 1.0    # passes all but at most 1 test
+
+
+def classify_assertion_state(passed: int, total: int) -> State:
+    """Subdivide assertion failures by how many tests passed."""
+    if total == 0:
+        return State.ASSERTION_FAILURE
+    if passed == 0:
+        return State.WRONG_ALGORITHM
+    if passed >= total - 1:
+        return State.NEAR_MISS
+    return State.PARTIAL_PASS
 
 TERMINAL_STATES: set[State] = {
     State.FEEDBACK_PASS,

@@ -15,7 +15,7 @@ from agent_repair_eval.schemas import (
     Problem,
     SandboxConfig,
 )
-from agent_repair_eval.states import FeedbackType, FinalOutcome, State
+from agent_repair_eval.states import FeedbackType, FinalOutcome, State  # noqa: F401 (State.WRONG_ALGORITHM etc used below)
 from agent_repair_eval.utils import sha256_text
 
 
@@ -150,7 +150,13 @@ def run_problem_episode(
     )
     if hidden_result.state == State.FEEDBACK_PASS:
         final_outcome = FinalOutcome.FINAL_PASS
-    elif hidden_result.state in (State.ASSERTION_FAILURE, State.OUTPUT_FORMAT_ERROR):
+    elif hidden_result.state in (
+        State.ASSERTION_FAILURE,
+        State.WRONG_ALGORITHM,
+        State.PARTIAL_PASS,
+        State.NEAR_MISS,
+        State.OUTPUT_FORMAT_ERROR,
+    ):
         final_outcome = FinalOutcome.FINAL_FAIL
     else:
         final_outcome = FinalOutcome.FINAL_ERROR

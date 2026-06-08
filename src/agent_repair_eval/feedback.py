@@ -12,7 +12,7 @@ def choose_feedback_type(result: ExecutionResult, policy: str = "structured") ->
         return FeedbackType.ERROR_CATEGORY_FEEDBACK
     if policy == "raw_terminal":
         return FeedbackType.RAW_TERMINAL_FEEDBACK
-    if result.state == State.ASSERTION_FAILURE:
+    if result.state in (State.ASSERTION_FAILURE, State.WRONG_ALGORITHM, State.PARTIAL_PASS, State.NEAR_MISS):
         return FeedbackType.COUNTEREXAMPLE_FEEDBACK
     return FeedbackType.STRUCTURED_FEEDBACK
 
@@ -93,6 +93,45 @@ def build_standardized_feedback(
             result,
             "Your previous solution raised a zero division error during execution.",
             "Please revise the solution so that division by zero does not occur for the tested input.",
+        )
+
+    if state == State.WRONG_ALGORITHM:
+        return (
+            f"{header}\n\n"
+            "Your previous solution executed without errors but failed every feedback test.\n"
+            f"Error category: {state.value}\n"
+            f"Feedback tests passed: {result.passed}/{result.total}\n"
+            "Example failing case:\n"
+            f"Input:\n{result.failing_input}\n"
+            f"Expected output:\n{result.expected_output}\n"
+            f"Actual output:\n{result.actual_output}\n"
+            "The logic is incorrect for all tested inputs — please reconsider the algorithm."
+        )
+
+    if state == State.PARTIAL_PASS:
+        return (
+            f"{header}\n\n"
+            "Your previous solution executed without errors but failed some feedback tests.\n"
+            f"Error category: {state.value}\n"
+            f"Feedback tests passed: {result.passed}/{result.total}\n"
+            "Example failing case:\n"
+            f"Input:\n{result.failing_input}\n"
+            f"Expected output:\n{result.expected_output}\n"
+            f"Actual output:\n{result.actual_output}\n"
+            "Please revise the solution to handle the failing cases."
+        )
+
+    if state == State.NEAR_MISS:
+        return (
+            f"{header}\n\n"
+            "Your previous solution was almost correct — it passed all but one feedback test.\n"
+            f"Error category: {state.value}\n"
+            f"Feedback tests passed: {result.passed}/{result.total}\n"
+            "The single failing case:\n"
+            f"Input:\n{result.failing_input}\n"
+            f"Expected output:\n{result.expected_output}\n"
+            f"Actual output:\n{result.actual_output}\n"
+            "Please make a targeted fix for this edge case."
         )
 
     if state == State.ASSERTION_FAILURE:
