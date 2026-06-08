@@ -59,6 +59,38 @@ def _json_safe(value: Any) -> Any:
         return repr(value)
 
 
+def _normalize(value: Any) -> Any:
+    """Normalize a value for comparison.
+
+    Expected outputs are round-tripped through JSON when the test payload is
+    serialized, which turns tuples into lists. To avoid false OUTPUT_FORMAT_ERROR
+    reports, we recursively coerce tuples to lists on both sides so a correct
+    tuple return value compares equal to its JSON-flattened expected list.
+    """
+    if isinstance(value, (list, tuple)):
+        return [_normalize(v) for v in value]
+    if isinstance(value, dict):
+        return {k: _normalize(v) for k, v in value.items()}
+    return value
+
+
+def _is_number(value: Any) -> bool:
+    # bool is a subclass of int; treat all of these as comparable numbers.
+    return isinstance(value, (int, float)) and not isinstance(value, str)
+
+
+def _format_matches(actual: Any, expected: Any) -> bool:
+    """True if actual and expected have compatible output formats/types.
+
+    list/tuple are considered the same format (JSON erases the distinction).
+    int/float/bool are all considered numeric and mutually compatible.
+    """
+    if _is_number(actual) and _is_number(expected):
+        return True
+    norm_a, norm_e = _normalize(actual), _normalize(expected)
+    return type(norm_a) is type(norm_e)
+
+
 def _call_with_input(fn: Any, test_input: Any) -> Any:
     if isinstance(test_input, list):
         return fn(*copy.deepcopy(test_input))
@@ -280,7 +312,7 @@ def _run_payload(payload: dict[str, Any]) -> dict[str, Any]:
             result["runtime_ms"] = int((time.perf_counter() - started) * 1000)
             return result
 
-        if type(actual) is not type(expected):
+        if not _format_matches(actual, expected):
             result.update(
                 {
                     "state": "OUTPUT_FORMAT_ERROR",
@@ -295,7 +327,8 @@ def _run_payload(payload: dict[str, Any]) -> dict[str, Any]:
             result["runtime_ms"] = int((time.perf_counter() - started) * 1000)
             return result
 
-        if actual == expected:
+        # Compare structurally with tuples/lists normalized to lists.
+        if _normalize(actual) == _normalize(expected):
             passed += 1
         elif first_failure is None:
             first_failure = {
